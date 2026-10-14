@@ -33,6 +33,30 @@
   --zen-main-browser-background-toolbar-old: var(--little-zen-window-theme-background) !important;
 }
 
+:root[zen-little-window="true"][zen-little-window-idle]:not([zen-has-empty-tab="true"]) #zen-browser-background::after {
+  background:
+    linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
+    var(--zen-main-browser-background) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-idle]:not([zen-has-empty-tab="true"]) #zen-browser-background::before {
+  background:
+    linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
+    var(--zen-main-browser-background-old) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-idle]:not([zen-has-empty-tab="true"]) #zen-toolbar-background::after {
+  background:
+    linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
+    var(--zen-main-browser-background-toolbar) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window-idle]:not([zen-has-empty-tab="true"]) #zen-toolbar-background::before {
+  background:
+    linear-gradient(rgb(255 255 255 / 28%), rgb(255 255 255 / 28%)),
+    var(--zen-main-browser-background-toolbar-old) !important;
+}
+
 #zen-little-window-loading-overlay {
   display: none;
 }
