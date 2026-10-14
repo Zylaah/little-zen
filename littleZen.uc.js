@@ -20,6 +20,8 @@
   const LITTLE_ZEN_THEME_MESSAGE_NAME = "little-zen:theme-response";
   const LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS = 250;
   const LITTLE_ZEN_ROUTING_DEBUG_PREF = "extensions.littleZen.debugRouting";
+  const LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF =
+    "zen.view.experimental-force-window-controls-left";
   const LITTLE_ZEN_STALLED_LOAD_TIMEOUT_MS = 25000;
 
   const PATCH_FLAGS = {
@@ -150,6 +152,57 @@
     );
   }
 
+  function matchMediaTrue(win, query) {
+    try {
+      return !!win.matchMedia?.(query)?.matches;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function usesLeftWindowControls(win) {
+    if (AppConstants.platform === "macosx") {
+      return true;
+    }
+
+    try {
+      if (Services.prefs.getBoolPref(LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF, false)) {
+        return true;
+      }
+    } catch (error) {}
+
+    return matchMediaTrue(win, "(-moz-gtk-csd-reversed-placement)");
+  }
+
+  function syncLittleWindowControlSide(win) {
+    const root = win?.document?.documentElement;
+    if (!root) {
+      return false;
+    }
+
+    const left = usesLeftWindowControls(win);
+    if (left) {
+      root.setAttribute("zen-window-buttons-reversed", "true");
+    } else {
+      root.removeAttribute("zen-window-buttons-reversed");
+    }
+    return left;
+  }
+
+  function getLittleWindowButtons(win) {
+    try {
+      const actual = win.gZenVerticalTabsManager?.actualWindowButtons;
+      if (actual?.isConnected) {
+        return actual;
+      }
+    } catch (error) {}
+
+    return (
+      win.document.querySelector("#nav-bar .titlebar-buttonbox-container") ||
+      win.document.querySelector(".titlebar-buttonbox-container")
+    );
+  }
+
   function isEmptyLittleWindow(win) {
     return isLittleWindow(win) && !!win.gBrowser?.selectedTab?.hasAttribute("zen-empty-tab");
   }
@@ -268,6 +321,7 @@
       const root = win.document.documentElement;
       root.setAttribute(LITTLE_WINDOW_ATTR, "true");
       root.toggleAttribute("zen-little-window-loading", !!options.url);
+      syncLittleWindowControlSide(win);
     } catch (error) {
       log("Could not mark Little Zen window early", error);
     }
@@ -1258,6 +1312,29 @@
     });
   }
 
+  function positionLittleWindowButtons(win) {
+    const navBar = win.document.getElementById("nav-bar");
+    const buttons = getLittleWindowButtons(win);
+    if (!navBar || !buttons) {
+      return;
+    }
+
+    const left = syncLittleWindowControlSide(win);
+    if (left) {
+      if (navBar.firstElementChild !== buttons) {
+        navBar.prepend(buttons);
+        log("Moved Little Zen window controls to the start of the navbar");
+      }
+    } else if (navBar.lastElementChild !== buttons) {
+      navBar.append(buttons);
+      log("Moved Little Zen window controls to the end of the navbar");
+    }
+
+    for (const extra of win.document.querySelectorAll(".titlebar-buttonbox-container")) {
+      extra.toggleAttribute("little-zen-unused-controls", extra !== buttons);
+    }
+  }
+
   function positionLittleWindowNavbar(win) {
     const navBar = win.document.getElementById("nav-bar");
     const navContainer = win.document.getElementById(
@@ -1277,6 +1354,40 @@
           target.insertBefore(item, urlbar);
         }
       }
+    }
+
+    positionLittleWindowButtons(win);
+  }
+
+  function attachWindowControlsPrefSync(win) {
+    if (win.__littleZenWindowControlsPrefSyncAttached) {
+      return;
+    }
+    win.__littleZenWindowControlsPrefSyncAttached = true;
+
+    const observer = () => {
+      if (!isLittleWindow(win) || win.closed) {
+        return;
+      }
+      positionLittleWindowNavbar(win);
+    };
+
+    try {
+      Services.prefs.addObserver(LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF, observer);
+      win.addEventListener(
+        "unload",
+        () => {
+          try {
+            Services.prefs.removeObserver(
+              LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF,
+              observer
+            );
+          } catch (error) {}
+        },
+        { once: true }
+      );
+    } catch (error) {
+      log("Could not attach Little Zen window-controls pref observer", error);
     }
   }
 
@@ -3403,6 +3514,7 @@
     patchUrlbar(win);
     attachEmptyTabStateTracking(win);
     attachTransparentBrowserPrefSync(win);
+    attachWindowControlsPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
     attachDoubleEscapeClose(win);
     syncLittleWindowTransparentBrowsers(win);
