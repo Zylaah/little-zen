@@ -496,6 +496,15 @@
   overflow: hidden !important;
 }
 
+:root[zen-little-window="true"][little-zen-bright-controls="true"] :is(
+  .titlebar-min,
+  .titlebar-max,
+  .titlebar-restore,
+  .titlebar-close
+):not(:hover):not(:-moz-window-inactive) {
+  background-color: rgb(0 0 0 / 36%) !important;
+}
+
 :root[zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) .titlebar-button.titlebar-close {
   border-top-right-radius: var(--blended-addressbar-frame-radius);
   padding-inline-end: 22px !important;

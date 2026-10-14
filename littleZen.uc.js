@@ -27,6 +27,7 @@
   const LITTLE_ZEN_UNSURE_RECHECK_MS = 200;
   const LITTLE_ZEN_SCROLL_SAMPLE_MS = 50;
   const LITTLE_ZEN_SITE_COLORS_PREF = "extensions.littleZen.siteColors";
+  const LITTLE_ZEN_BRIGHT_CONTROL_LUMINANCE = 0.78;
   const LITTLE_ZEN_ROUTING_DEBUG_PREF = "extensions.littleZen.debugRouting";
   const LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF =
     "zen.view.experimental-force-window-controls-left";
@@ -1915,6 +1916,11 @@
       : "rgba(245, 247, 251, 0.96)";
   }
 
+  function littleZenHeaderNeedsDarkControls(color) {
+    const rgb = parseCssRgb(color);
+    return !!rgb && getRelativeLuminance(rgb) >= LITTLE_ZEN_BRIGHT_CONTROL_LUMINANCE;
+  }
+
   function getReadableForeground(bg, candidates = []) {
     const bgRgb = parseCssRgb(bg);
     if (!bgRgb) {
@@ -2319,6 +2325,9 @@
     if (idle) {
       const idleTheme = theme?.source === "idle-chrome" ? theme : getLittleZenIdleChromeTheme(win);
       const compactEmpty = root.hasAttribute("zen-has-empty-tab");
+      const brightControls = compactEmpty && littleZenHeaderNeedsDarkControls(idleTheme.bg);
+      root.toggleAttribute("little-zen-bright-controls", brightControls);
+      setCssVar(root, "--little-zen-traffic-rest", brightControls ? "rgb(0 0 0 / 36%)" : null);
       setCssVar(
         root,
         "--little-zen-page-header-background",
@@ -2352,6 +2361,9 @@
     const foreground = getStableHeaderForeground(themeRgb, theme?.fg);
     const windowBackground = themeColor;
     const isLightTheme = getRelativeLuminance(themeRgb) > 0.56;
+    const brightControls = getRelativeLuminance(themeRgb) >= LITTLE_ZEN_BRIGHT_CONTROL_LUMINANCE;
+    root.toggleAttribute("little-zen-bright-controls", brightControls);
+    setCssVar(root, "--little-zen-traffic-rest", brightControls ? "rgb(0 0 0 / 36%)" : null);
     const controlOutline = isLightTheme
       ? "rgba(0, 0, 0, 0.14)"
       : "rgba(255, 255, 255, 0.13)";
