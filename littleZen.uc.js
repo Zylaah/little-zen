@@ -17,8 +17,16 @@
     "titlebar,close,toolbar,location,personalbar=no,status,menubar=no," +
     `resizable,minimizable,scrollbars,width=${URLBAR_WIDTH},height=${URLBAR_HEIGHT},centerscreen`;
   const LITTLE_ZEN_THEME_CACHE_LIMIT = 200;
-  const LITTLE_ZEN_THEME_MESSAGE_NAME = "little-zen:theme-response";
-  const LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS = 250;
+  const LITTLE_ZEN_XHTML_NS = "http://www.w3.org/1999/xhtml";
+  const LITTLE_ZEN_SAMPLE_BAND = 24;
+  const LITTLE_ZEN_SAMPLE_SCALE = 0.5;
+  const LITTLE_ZEN_FULL_VIEW_SCALE = 0.125;
+  const LITTLE_ZEN_MIN_COLOR_SHARE = 0.6;
+  const LITTLE_ZEN_SAME_COLOR_DISTANCE = 10;
+  const LITTLE_ZEN_CHECK_DISTANCE = 24;
+  const LITTLE_ZEN_UNSURE_RECHECK_MS = 200;
+  const LITTLE_ZEN_SCROLL_SAMPLE_MS = 50;
+  const LITTLE_ZEN_SITE_COLORS_PREF = "extensions.littleZen.siteColors";
   const LITTLE_ZEN_ROUTING_DEBUG_PREF = "extensions.littleZen.debugRouting";
   const LITTLE_ZEN_WINDOW_CONTROLS_LEFT_PREF =
     "zen.view.experimental-force-window-controls-left";
@@ -40,10 +48,12 @@
     keyListener: "__littleZenKeyListenerAttached",
     tabClickListener: "__littleZenTabClickListenerAttached",
     contentLinkListener: "__littleZenContentLinkListenerAttached",
+    siteColor: "__littleZenSiteColorWatchersAttached",
     window: "__littleZenBootstrapped",
   };
   const littleZenThemeCache = new Map();
-  let littleZenThemeRequestSeq = 0;
+  let littleZenSiteColors = null;
+  let littleZenSiteColorsSaveTimer = null;
 
   const { AppConstants } = ChromeUtils.importESModule(
     "resource://gre/modules/AppConstants.sys.mjs"
@@ -1043,8 +1053,9 @@
 
     const scheduleThemeUpdate = (reason) => {
       updateLittleZenBlendedTheme(win, reason);
-      win.setTimeout(() => updateLittleZenBlendedTheme(win, `${reason}:settled`), 180);
-      win.setTimeout(() => updateLittleZenBlendedTheme(win, `${reason}:late`), 700);
+      for (const ms of [150, 450, 1200, 2800, 5000]) {
+        win.setTimeout(() => updateLittleZenBlendedTheme(win, `${reason}:${ms}`), ms);
+      }
     };
 
     const sync = event => {
@@ -1407,12 +1418,23 @@
     const root = win.document.documentElement;
     root.setAttribute(LITTLE_WINDOW_ATTR, "true");
     root.setAttribute("zen-compact-mode", "false");
-    root.toggleAttribute("zen-no-padding", usesEmptyLittleWindowPresentation(win));
-
     try {
       win.ZenThemeModifier?.updateElementSeparation?.();
     } catch (error) {
       log("Could not refresh ZenThemeModifier.", error);
+    }
+
+    if (usesEmptyLittleWindowPresentation(win)) {
+      root.setAttribute("zen-no-padding", "true");
+      root.style.setProperty("--zen-element-separation", "0.1px");
+    } else {
+      root.removeAttribute("zen-no-padding");
+      root.style.removeProperty("--zen-element-separation");
+      try {
+        win.ZenThemeModifier?.updateElementSeparation?.();
+      } catch (error) {
+        log("Could not restore Zen element separation.", error);
+      }
     }
 
     try {
@@ -1867,6 +1889,48 @@
     return `rgb(${color.r}, ${color.g}, ${color.b})`;
   }
 
+  function getLittleZenOpaqueBackdrop(win) {
+    const dark = win?.document?.documentElement?.hasAttribute("zen-should-be-dark-mode");
+    return dark ? { r: 16, g: 18, b: 24 } : { r: 245, g: 247, b: 251 };
+  }
+
+  function flattenCssColorToOpaque(color, backdrop) {
+    const rgb = parseCssRgb(color);
+    if (!rgb) {
+      return rgbToCss(backdrop);
+    }
+    const alpha = getCssColorAlpha(color);
+    if (alpha === null || alpha >= 0.96) {
+      return rgbToCss(rgb);
+    }
+    return rgbToCss({
+      r: Math.round(rgb.r * alpha + backdrop.r * (1 - alpha)),
+      g: Math.round(rgb.g * alpha + backdrop.g * (1 - alpha)),
+      b: Math.round(rgb.b * alpha + backdrop.b * (1 - alpha)),
+    });
+  }
+
+  function probeCssColor(win, cssValue) {
+    const doc = win?.document;
+    if (!doc?.documentElement) {
+      return null;
+    }
+    const probe = doc.createElement("div");
+    probe.style.position = "fixed";
+    probe.style.pointerEvents = "none";
+    probe.style.opacity = "0";
+    probe.style.backgroundColor = cssValue;
+    probe.style.color = "var(--toolbox-textcolor)";
+    doc.documentElement.appendChild(probe);
+    const style = win.getComputedStyle(probe);
+    const result = {
+      bg: style.backgroundColor,
+      fg: style.color,
+    };
+    probe.remove();
+    return result;
+  }
+
   function parseCssRgb(input) {
     if (!input) {
       return null;
@@ -1953,25 +2017,6 @@
     return alpha === null || alpha >= 0.08;
   }
 
-  function extractCssColor(input) {
-    const value = String(input || "").trim();
-    if (!value || value === "none") {
-      return null;
-    }
-    const candidates = value.match(/[a-z-]+\([^)]*\)|#[0-9a-f]{3,8}\b/gi) || [];
-    return candidates.find(hasVisibleColor) || null;
-  }
-
-  function getStyleBackground(style) {
-    if (!style) {
-      return null;
-    }
-    if (hasVisibleColor(style.backgroundColor)) {
-      return style.backgroundColor;
-    }
-    return extractCssColor(style.backgroundImage);
-  }
-
   function getRelativeLuminance(color) {
     const toLinear = (channel) => {
       const value = channel / 255;
@@ -2020,614 +2065,313 @@
     return chooseForeground(bgRgb);
   }
 
-  function getCurrentThemeColorScheme(win) {
-    const rootStyle = win.getComputedStyle(win.document.documentElement);
-    const colorScheme =
-      rootStyle.getPropertyValue("--toolbar-color-scheme") ||
-      rootStyle.colorScheme;
-    const normalizedScheme = String(colorScheme || "").trim().toLowerCase();
-    if (normalizedScheme === "light" || normalizedScheme === "dark") {
-      return normalizedScheme;
-    }
-    return win.document.documentElement.hasAttribute("zen-should-be-dark-mode") ? "dark" : "light";
-  }
-
-  function getNeutralHeaderShade(win, source = "unknown-page") {
-    const isLight = getCurrentThemeColorScheme(win) === "light";
-    return {
-      bg: isLight ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)",
-      fg: isLight ? "rgba(11, 13, 16, 0.82)" : "rgba(245, 247, 251, 0.9)",
-      source,
-    };
-  }
-
-  function getThemeColorTheme(browser) {
-    const doc = browser?.contentDocument;
-    const view = doc?.defaultView;
-    if (!doc || !view) {
-      return null;
-    }
-
-    const metas = doc.querySelectorAll?.('meta[name="theme-color" i]') || [];
-    for (const meta of metas) {
-      const media = meta.getAttribute?.("media") || "";
-      if (media) {
-        try {
-          if (!view.matchMedia(media).matches) {
-            continue;
-          }
-        } catch (error) {}
-      }
-
-      const bg = meta.getAttribute?.("content") || "";
-      if (!hasVisibleColor(bg)) {
-        continue;
-      }
-
-      const rootStyle = doc.documentElement ? view.getComputedStyle(doc.documentElement) : null;
-      const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
-      const bgRgb = parseCssRgb(bg);
-      return {
-        bg,
-        fg: getReadableForeground(bg, [
-          bodyStyle?.color || null,
-          rootStyle?.color || null,
-          bgRgb ? chooseForeground(bgRgb) : null,
-        ]),
-        source: "theme-color",
-      };
-    }
-
-    return null;
-  }
-
-  function getDocumentCanvasTheme(browser) {
-    const doc = browser?.contentDocument;
-    const view = doc?.defaultView;
-    const root = doc?.documentElement;
-    if (!doc || !view || !root) {
-      return null;
-    }
-
-    const rootStyle = view.getComputedStyle(root);
-    const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
-    let canvasFg = "";
-    let probe = null;
-    try {
-      probe = doc.createElement("div");
-      probe.style.cssText =
-        "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;background-color:Canvas;color:CanvasText;";
-      root.appendChild(probe);
-      canvasFg = view.getComputedStyle(probe).color;
-    } catch (error) {
-    } finally {
-      try {
-        probe?.remove?.();
-      } catch (error) {}
-    }
-
-    const bg = [
-      bodyStyle ? getStyleBackground(bodyStyle) : null,
-      getStyleBackground(rootStyle),
-    ].find(hasVisibleColor);
-    if (!bg) {
-      return null;
-    }
-
+  function getLittleZenIdleChromeTheme(win) {
+    const backdrop = getLittleZenOpaqueBackdrop(win);
+    const toolbar = probeCssColor(win, "var(--zen-main-browser-background-toolbar)");
+    const main = probeCssColor(win, "var(--zen-main-browser-background)");
+    const rootBg = win.document
+      ? win.getComputedStyle(win.document.documentElement).backgroundColor
+      : null;
+    const rawBg =
+      [toolbar?.bg, main?.bg, rootBg].find(hasVisibleColor) || rgbToCss(backdrop);
+    const bg = flattenCssColorToOpaque(rawBg, backdrop);
     return {
       bg,
-      fg: getReadableForeground(bg, [
-        bodyStyle?.color || null,
-        rootStyle?.color || null,
-        canvasFg || null,
-      ]),
-      source: "document-canvas",
+      fg: getReadableForeground(bg, [toolbar?.fg, main?.fg].filter(Boolean)),
+      source: "idle-chrome",
     };
   }
 
-  function getThemeFromElement(view, element, source = "element", allowPageFallback = true) {
-    if (!view || !element) {
-      return null;
+  function littleZenRgbToCss(rgb) {
+    if (!rgb) {
+      return "";
     }
-
-    let fg = null;
-    let bg = null;
-    let current = element;
-    const doc = element.ownerDocument || null;
-
-    while (current) {
-      if (!allowPageFallback && (current === doc?.body || current === doc?.documentElement)) {
-        break;
-      }
-      const style = view.getComputedStyle(current);
-      if (!fg && hasVisibleColor(style.color)) {
-        fg = style.color;
-      }
-      const background = getStyleBackground(style);
-      if (!bg && hasVisibleColor(background)) {
-        bg = background;
-      }
-      if (bg && fg) {
-        break;
-      }
-      current = current.parentElement;
-    }
-
-    if (!hasVisibleColor(bg)) {
-      return null;
-    }
-
-    return {
-      bg,
-      fg: getReadableForeground(bg, [fg]),
-      source,
-    };
+    return `rgb(${Math.round(rgb[0])}, ${Math.round(rgb[1])}, ${Math.round(rgb[2])})`;
   }
 
-  function getTopVisibleTheme(browser) {
-    const doc = browser?.contentDocument;
-    const view = doc?.defaultView;
-    if (!doc || !view) {
-      return null;
+  function littleZenColorDistance(a, b) {
+    if (!a || !b) {
+      return Infinity;
     }
-
-    const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
-    const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
-    const xMid = Math.max(1, Math.floor((width || 2) / 2));
-    const xEnd = Math.max(1, (width || 2) - 2);
-    const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
-    const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
-    const points = [
-      [1, yTop],
-      [xMid, yTop],
-      [xEnd, yTop],
-      [1, yBand],
-      [xMid, yBand],
-    ];
-    let firstRendered = null;
-
-    const isRenderedElement = (candidate) => {
-      if (!candidate) {
-        return false;
-      }
-      const rect = candidate.getBoundingClientRect?.();
-      const style = view.getComputedStyle(candidate);
-      return (
-        rect?.width > 0 &&
-        rect?.height > 0 &&
-        style.visibility !== "hidden" &&
-        style.visibility !== "collapse" &&
-        style.display !== "none" &&
-        Number(style.opacity || 1) > 0.05
-      );
-    };
-
-    for (const [x, y] of points) {
-      const elements = doc.elementsFromPoint?.(x, y) || [];
-      for (const element of elements) {
-        if (!isRenderedElement(element)) {
-          continue;
-        }
-        firstRendered ||= element;
-        const background = getStyleBackground(view.getComputedStyle(element));
-        if (hasVisibleColor(background)) {
-          return getThemeFromElement(view, element, "top-visible", false);
-        }
-      }
-    }
-
-    return getThemeFromElement(
-      view,
-      firstRendered || doc.elementFromPoint?.(1, 3),
-      "top-visible",
-      false
+    return (
+      Math.abs(a[0] - b[0]) +
+      Math.abs(a[1] - b[1]) +
+      Math.abs(a[2] - b[2])
     );
   }
 
-  function getChromeToolbarFallbackTheme(win) {
-    const doc = win.document;
-    const probe = doc.createElement("div");
-    probe.style.position = "fixed";
-    probe.style.pointerEvents = "none";
-    probe.style.opacity = "0";
-    probe.style.backgroundColor = "var(--zen-main-browser-background-toolbar)";
-    probe.style.color = "var(--toolbox-textcolor)";
-    doc.documentElement.appendChild(probe);
-    const probeStyle = win.getComputedStyle(probe);
-    const toolbarBg = probeStyle.backgroundColor;
-    const toolbarFg = probeStyle.color;
-    probe.remove();
+  function littleZenPageShowsThrough(win, browser) {
+    return (
+      !browser?.isRemoteBrowser ||
+      !!win.gBrowser?.getTabForBrowser(browser)?.hasAttribute("zen-empty-tab")
+    );
+  }
 
-    const rootStyle = win.getComputedStyle(doc.documentElement);
-    const rootBg = rootStyle.backgroundColor;
-    const bg = [toolbarBg, rootBg, "Canvas"].find(hasVisibleColor) || "Canvas";
+  function getLittleZenSampleCanvas(win, key) {
+    const store = (win.__littleZenSampleCanvases ||= {});
+    if (!store[key]) {
+      store[key] = win.document.createElementNS(LITTLE_ZEN_XHTML_NS, "canvas");
+    }
+    return store[key];
+  }
+
+  function compositeLittleZenSample(rgb, backdrop) {
+    const alpha = (rgb[3] ?? 255) / 255;
+    if (alpha >= 0.96) {
+      return [rgb[0], rgb[1], rgb[2]];
+    }
+    return [
+      Math.round(rgb[0] * alpha + backdrop.r * (1 - alpha)),
+      Math.round(rgb[1] * alpha + backdrop.g * (1 - alpha)),
+      Math.round(rgb[2] * alpha + backdrop.b * (1 - alpha)),
+    ];
+  }
+
+  function commonColorFromLittleZenPixels(data, win) {
+    const buckets = new Map();
+    for (let i = 0; i < data.length; i += 4) {
+      const key =
+        ((data[i] >> 3) << 13) |
+        ((data[i + 1] >> 3) << 8) |
+        ((data[i + 2] >> 3) << 3) |
+        (data[i + 3] >> 5);
+      const bucket = buckets.get(key) || { count: 0, r: 0, g: 0, b: 0, a: 0 };
+      bucket.count++;
+      bucket.r += data[i];
+      bucket.g += data[i + 1];
+      bucket.b += data[i + 2];
+      bucket.a += data[i + 3];
+      buckets.set(key, bucket);
+    }
+
+    let best = null;
+    for (const bucket of buckets.values()) {
+      if (!best || bucket.count > best.count) {
+        best = bucket;
+      }
+    }
+    if (!best) {
+      return null;
+    }
+
+    const rgb = [best.r, best.g, best.b, best.a].map((value) =>
+      Math.round(value / best.count)
+    );
+    const backdrop = getLittleZenOpaqueBackdrop(win);
+    return {
+      rgb: compositeLittleZenSample(rgb, backdrop),
+      share: best.count / (data.length / 4),
+    };
+  }
+
+  function sampleLittleZenShownTop(win, browser) {
+    const box = browser.getBoundingClientRect();
+    if (!box.width || !box.height) {
+      return null;
+    }
+    const canvas = getLittleZenSampleCanvas(win, "shown");
+    canvas.width = Math.max(1, Math.round(box.width * LITTLE_ZEN_SAMPLE_SCALE));
+    canvas.height = Math.max(1, Math.round(LITTLE_ZEN_SAMPLE_BAND * LITTLE_ZEN_SAMPLE_SCALE));
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.setTransform(LITTLE_ZEN_SAMPLE_SCALE, 0, 0, LITTLE_ZEN_SAMPLE_SCALE, 0, 0);
+    ctx.drawWindow(
+      win,
+      box.left,
+      box.top,
+      box.width,
+      LITTLE_ZEN_SAMPLE_BAND,
+      "rgb(0, 0, 0)",
+      ctx.DRAWWINDOW_DRAW_VIEW
+    );
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return commonColorFromLittleZenPixels(
+      ctx.getImageData(0, 0, canvas.width, canvas.height).data,
+      win
+    );
+  }
+
+  async function sampleLittleZenTopColor(win, browser) {
+    if (!browser) {
+      return null;
+    }
+    if (littleZenPageShowsThrough(win, browser)) {
+      return sampleLittleZenShownTop(win, browser);
+    }
+
+    const windowGlobal = browser.browsingContext?.currentWindowGlobal;
+    const width = browser.clientWidth;
+    if (!windowGlobal || !width) {
+      return sampleLittleZenShownTop(win, browser);
+    }
+
+    const backing =
+      browser.getAttribute("transparent") === "true"
+        ? "transparent"
+        : "rgb(255, 255, 255)";
+    let bitmap;
+    try {
+      bitmap = await windowGlobal.drawSnapshot(
+        null,
+        LITTLE_ZEN_FULL_VIEW_SCALE,
+        backing
+      );
+    } catch (error) {
+      log("Little Zen page snapshot failed", error);
+      return sampleLittleZenShownTop(win, browser);
+    }
+    if (!bitmap) {
+      return sampleLittleZenShownTop(win, browser);
+    }
+
+    try {
+      const canvas = getLittleZenSampleCanvas(win, "snapshot");
+      canvas.width = bitmap.width;
+      canvas.height = Math.min(
+        LITTLE_ZEN_SAMPLE_BAND * LITTLE_ZEN_FULL_VIEW_SCALE,
+        bitmap.height
+      );
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0);
+      return commonColorFromLittleZenPixels(
+        ctx.getImageData(0, 0, canvas.width, canvas.height).data,
+        win
+      );
+    } finally {
+      try {
+        bitmap.close?.();
+      } catch (error) {}
+    }
+  }
+
+  function themeFromLittleZenSample(win, reading, href, source = "page-sample") {
+    if (!reading?.rgb) {
+      return null;
+    }
+    const bg = littleZenRgbToCss(reading.rgb);
+    const bgRgb = { r: reading.rgb[0], g: reading.rgb[1], b: reading.rgb[2] };
     return {
       bg,
-      fg: getReadableForeground(bg, [toolbarFg]),
-      source: "toolbar-fallback",
-    };
-  }
-
-  async function getContentTaskPageTheme(browser) {
-    if (!browser || typeof ContentTask === "undefined" || !ContentTask?.spawn) {
-      return null;
-    }
-
-    try {
-      return await ContentTask.spawn(browser, null, () => {
-        const parseCssRgb = (input) => {
-          if (!input) return null;
-          const raw = String(input).trim();
-          const hex = raw.match(/^#([0-9a-f]{3,8})$/i);
-          if (hex) {
-            const value = hex[1];
-            const expand = (part) => part.length === 1 ? `${part}${part}` : part;
-            return {
-              r: parseInt(expand(value.length <= 4 ? value[0] : value.slice(0, 2)), 16),
-              g: parseInt(expand(value.length <= 4 ? value[1] : value.slice(2, 4)), 16),
-              b: parseInt(expand(value.length <= 4 ? value[2] : value.slice(4, 6)), 16),
-            };
-          }
-          const rgb = raw.match(/^rgba?\(([^)]+)\)$/i);
-          if (!rgb) return null;
-          const parts = rgb[1].replace(/\s*\/\s*[\d.]+%?$/, "").split(/[,\s]+/).filter(Boolean);
-          if (parts.length < 3) return null;
-          const read = (part) => {
-            const value = parseFloat(part);
-            return Math.max(0, Math.min(255, Math.round(String(part).trim().endsWith("%") ? value * 2.55 : value)));
-          };
-          return { r: read(parts[0]), g: read(parts[1]), b: read(parts[2]) };
-        };
-        const luminance = (color) => {
-          const toLinear = (channel) => {
-            const value = channel / 255;
-            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
-          };
-          return 0.2126 * toLinear(color.r) + 0.7152 * toLinear(color.g) + 0.0722 * toLinear(color.b);
-        };
-        const alpha = (value) => {
-          const match = String(value || "").trim().match(/^[a-z-]+\(([^)]+)\)$/i);
-          if (!match) return null;
-          const body = match[1].trim();
-          const raw = body.includes("/") ? body.slice(body.lastIndexOf("/") + 1).trim() : body.split(",")[3]?.trim();
-          if (!raw) return null;
-          const amount = parseFloat(raw);
-          return Number.isFinite(amount) ? (raw.endsWith("%") ? amount / 100 : amount) : null;
-        };
-        const visible = (input) => {
-          const value = String(input || "").trim().toLowerCase();
-          if (!value || value === "transparent") return false;
-          const a = alpha(value);
-          return a === null || a >= 0.08;
-        };
-        const extractColor = (input) =>
-          (String(input || "").match(/[a-z-]+\([^)]*\)|#[0-9a-f]{3,8}\b/gi) || []).find(visible) || null;
-        const styleBackground = (style) => visible(style?.backgroundColor) ? style.backgroundColor : extractColor(style?.backgroundImage);
-        const chooseFg = (bg) => {
-          const rgb = parseCssRgb(bg);
-          return rgb && luminance(rgb) > 0.6 ? "rgba(11, 13, 16, 0.92)" : "rgba(245, 247, 251, 0.96)";
-        };
-        const readableFg = (bg, candidates = []) =>
-          candidates.find((candidate) => {
-            if (!visible(candidate)) return false;
-            const bgRgb = parseCssRgb(bg);
-            const fgRgb = parseCssRgb(candidate);
-            if (!bgRgb || !fgRgb) return false;
-            const light = Math.max(luminance(bgRgb), luminance(fgRgb));
-            const dark = Math.min(luminance(bgRgb), luminance(fgRgb));
-            return (light + 0.05) / (dark + 0.05) >= 3;
-          }) || chooseFg(bg);
-        const themeFromElement = (view, element, source, allowPageFallback = true) => {
-          if (!view || !element) return null;
-          let fg = null;
-          let bg = null;
-          let current = element;
-          const doc = element.ownerDocument;
-          while (current) {
-            if (!allowPageFallback && (current === doc.body || current === doc.documentElement)) break;
-            const style = view.getComputedStyle(current);
-            if (!fg && visible(style.color)) fg = style.color;
-            const background = styleBackground(style);
-            if (!bg && visible(background)) bg = background;
-            if (bg && fg) break;
-            current = current.parentElement;
-          }
-          return visible(bg) ? { bg, fg: readableFg(bg, [fg]), source } : null;
-        };
-        const themeColorTheme = (doc, view) => {
-          for (const meta of doc.querySelectorAll?.('meta[name="theme-color" i]') || []) {
-            const media = meta.getAttribute?.("media") || "";
-            try {
-              if (media && !view.matchMedia(media).matches) continue;
-            } catch {}
-            const bg = meta.getAttribute?.("content") || "";
-            if (!visible(bg)) continue;
-            const rootStyle = doc.documentElement ? view.getComputedStyle(doc.documentElement) : null;
-            const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
-            return {
-              bg,
-              fg: readableFg(bg, [bodyStyle?.color || null, rootStyle?.color || null]),
-              source: "theme-color",
-            };
-          }
-          return null;
-        };
-        const topVisibleTheme = (doc, view) => {
-          const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
-          const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
-          const xMid = Math.max(1, Math.floor((width || 2) / 2));
-          const xEnd = Math.max(1, (width || 2) - 2);
-          const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
-          const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
-          const points = [[1, yTop], [xMid, yTop], [xEnd, yTop], [1, yBand], [xMid, yBand]];
-          let firstRendered = null;
-          const isRendered = (candidate) => {
-            if (!candidate) return false;
-            const rect = candidate.getBoundingClientRect?.();
-            const style = view.getComputedStyle(candidate);
-            return rect?.width > 0 && rect?.height > 0 && style.visibility !== "hidden" && style.visibility !== "collapse" && style.display !== "none" && Number(style.opacity || 1) > 0.05;
-          };
-          for (const [x, y] of points) {
-            for (const element of doc.elementsFromPoint?.(x, y) || []) {
-              if (!isRendered(element)) continue;
-              firstRendered ||= element;
-              const background = styleBackground(view.getComputedStyle(element));
-              if (visible(background)) return themeFromElement(view, element, "top-visible", false);
-            }
-          }
-          return themeFromElement(view, firstRendered || doc.elementFromPoint?.(1, 3), "top-visible", false);
-        };
-        const canvasTheme = (doc, view) => {
-          const root = doc.documentElement;
-          const rootStyle = view.getComputedStyle(root);
-          const bodyStyle = doc.body ? view.getComputedStyle(doc.body) : null;
-          const bg = [bodyStyle ? styleBackground(bodyStyle) : null, styleBackground(rootStyle)].find(visible);
-          return visible(bg)
-            ? { bg, fg: readableFg(bg, [bodyStyle?.color || null, rootStyle?.color || null]), source: "document-canvas" }
-            : null;
-        };
-
-        try {
-          const doc = content.document;
-          const view = doc?.defaultView;
-          if (!doc || !view || !doc.documentElement) return null;
-          const href = content.location.href;
-          const theme =
-            topVisibleTheme(doc, view) ||
-            themeColorTheme(doc, view) ||
-            themeFromElement(view, doc.body, "body") ||
-            themeFromElement(view, doc.documentElement, "html") ||
-            canvasTheme(doc, view);
-          return theme ? { ...theme, href, bridge: "content" } : null;
-        } catch {
-          return null;
-        }
-      });
-    } catch (error) {
-      log("Little Zen ContentTask theme lookup failed", error);
-      return null;
-    }
-  }
-
-  function getLittleZenBrowserMessageManager(browser) {
-    return browser?.messageManager || browser?.frameLoader?.messageManager || null;
-  }
-
-  function getLittleZenThemeFrameScript(requestId) {
-    return `
-      (() => {
-        const requestId = ${JSON.stringify(requestId)};
-        const messageName = ${JSON.stringify(LITTLE_ZEN_THEME_MESSAGE_NAME)};
-        const send = (payload) => sendAsyncMessage(messageName, { requestId, ...payload });
-        const alpha = value => {
-          const match = String(value || "").trim().match(/^[a-z-]+\\(([^)]+)\\)$/i);
-          if (!match) return null;
-          const body = match[1].trim();
-          const raw = body.includes("/") ? body.slice(body.lastIndexOf("/") + 1).trim() : body.split(",")[3]?.trim();
-          if (!raw) return null;
-          const amount = parseFloat(raw);
-          return Number.isFinite(amount) ? (raw.endsWith("%") ? amount / 100 : amount) : null;
-        };
-        const visible = input => {
-          const value = String(input || "").trim().toLowerCase();
-          if (!value || value === "transparent") return false;
-          const a = alpha(value);
-          return a === null || a >= 0.08;
-        };
-        const extractColor = input =>
-          (String(input || "").match(/[a-z-]+\\([^)]*\\)|#[0-9a-f]{3,8}\\b/gi) || []).find(visible) || null;
-        const styleBackground = style => visible(style?.backgroundColor) ? style.backgroundColor : extractColor(style?.backgroundImage);
-        const parseRgb = input => {
-          const raw = String(input || "").trim();
-          const rgb = raw.match(/^rgba?\\(([^)]+)\\)$/i);
-          if (!rgb) return null;
-          const parts = rgb[1].replace(/\\s*\\/\\s*[\\d.]+%?$/, "").split(/[,\\s]+/).filter(Boolean);
-          if (parts.length < 3) return null;
-          const read = part => {
-            const value = parseFloat(part);
-            return Math.max(0, Math.min(255, Math.round(String(part).trim().endsWith("%") ? value * 2.55 : value)));
-          };
-          return { r: read(parts[0]), g: read(parts[1]), b: read(parts[2]) };
-        };
-        const luminance = color => {
-          const lin = channel => {
-            const value = channel / 255;
-            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
-          };
-          return 0.2126 * lin(color.r) + 0.7152 * lin(color.g) + 0.0722 * lin(color.b);
-        };
-        const chooseFg = bg => {
-          const rgb = parseRgb(bg);
-          return rgb && luminance(rgb) > 0.6 ? "rgba(11, 13, 16, 0.92)" : "rgba(245, 247, 251, 0.96)";
-        };
-        const themeFromElement = (view, element, source, allowPageFallback = true) => {
-          if (!view || !element) return null;
-          let bg = null;
-          let fg = null;
-          let current = element;
-          const doc = element.ownerDocument;
-          while (current) {
-            if (!allowPageFallback && (current === doc.body || current === doc.documentElement)) break;
-            const style = view.getComputedStyle(current);
-            if (!fg && visible(style.color)) fg = style.color;
-            const background = styleBackground(style);
-            if (!bg && visible(background)) bg = background;
-            if (bg && fg) break;
-            current = current.parentElement;
-          }
-          return visible(bg) ? { bg, fg: fg || chooseFg(bg), source } : null;
-        };
-        const topVisibleTheme = (doc, view) => {
-          const width = view.innerWidth || doc.documentElement?.clientWidth || 0;
-          const height = view.innerHeight || doc.documentElement?.clientHeight || 0;
-          const xMid = Math.max(1, Math.floor((width || 2) / 2));
-          const xEnd = Math.max(1, (width || 2) - 2);
-          const yTop = Math.min(3, Math.max(0, (height || 4) - 1));
-          const yBand = Math.min(30, Math.max(0, (height || 31) - 1));
-          const points = [[1, yTop], [xMid, yTop], [xEnd, yTop], [1, yBand], [xMid, yBand]];
-          let firstRendered = null;
-          for (const [x, y] of points) {
-            for (const element of doc.elementsFromPoint?.(x, y) || []) {
-              if (!element) continue;
-              const rect = element.getBoundingClientRect?.();
-              const style = view.getComputedStyle(element);
-              if (!(rect?.width > 0 && rect?.height > 0) || style.visibility === "hidden" || style.visibility === "collapse" || style.display === "none" || Number(style.opacity || 1) <= 0.05) continue;
-              firstRendered ||= element;
-              if (visible(styleBackground(style))) return themeFromElement(view, element, "top-visible", false);
-            }
-          }
-          return themeFromElement(view, firstRendered || doc.elementFromPoint?.(1, 3), "top-visible", false);
-        };
-        const themeColorTheme = (doc, view) => {
-          for (const meta of doc.querySelectorAll?.('meta[name="theme-color" i]') || []) {
-            const media = meta.getAttribute?.("media") || "";
-            try { if (media && !view.matchMedia(media).matches) continue; } catch {}
-            const bg = meta.getAttribute?.("content") || "";
-            if (visible(bg)) return { bg, fg: chooseFg(bg), source: "theme-color" };
-          }
-          return null;
-        };
-        try {
-          if (content.top !== content) return;
-          const doc = content.document;
-          const view = doc?.defaultView;
-          if (!doc || !view || !doc.documentElement) return send({ ok: false });
-          const theme =
-            topVisibleTheme(doc, view) ||
-            themeColorTheme(doc, view) ||
-            themeFromElement(view, doc.body, "body") ||
-            themeFromElement(view, doc.documentElement, "html");
-          send({ ok: true, theme: theme ? { ...theme, href: content.location.href, bridge: "message-manager" } : null });
-        } catch (error) {
-          send({ ok: false, error: error?.message || String(error) });
-        }
-      })();
-    `;
-  }
-
-  async function getMessageManagerPageTheme(browser) {
-    const messageManager = getLittleZenBrowserMessageManager(browser);
-    if (!browser || !messageManager?.loadFrameScript || !messageManager?.addMessageListener) {
-      return null;
-    }
-
-    const requestId = `little-zen-theme-${Date.now()}-${++littleZenThemeRequestSeq}`;
-    return await new Promise((resolve) => {
-      let settled = false;
-      let timeoutId = 0;
-      const finish = (theme) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeoutId);
-        try {
-          messageManager.removeMessageListener(LITTLE_ZEN_THEME_MESSAGE_NAME, listener);
-        } catch (error) {}
-        resolve(theme || null);
-      };
-      const listener = {
-        receiveMessage(message) {
-          const data = message?.data;
-          if (!data || data.requestId !== requestId) {
-            return;
-          }
-          finish(data.theme || null);
-        },
-      };
-
-      const ownerWindow = browser.ownerGlobal || window;
-      timeoutId = ownerWindow.setTimeout(
-        () => finish(null),
-        LITTLE_ZEN_THEME_BRIDGE_TIMEOUT_MS
-      );
-      try {
-        messageManager.addMessageListener(LITTLE_ZEN_THEME_MESSAGE_NAME, listener);
-        const scriptUrl = `data:application/javascript;charset=utf-8,${encodeURIComponent(
-          getLittleZenThemeFrameScript(requestId)
-        )}`;
-        messageManager.loadFrameScript(scriptUrl, false);
-      } catch (error) {
-        finish(null);
-      }
-    });
-  }
-
-  async function getLittleZenAsyncPageTheme(browser) {
-    const lookups = [
-      getContentTaskPageTheme(browser),
-      getMessageManagerPageTheme(browser),
-    ];
-
-    return await new Promise((resolve) => {
-      let pending = lookups.length;
-      const finishEmpty = () => {
-        pending--;
-        if (pending === 0) {
-          resolve(null);
-        }
-      };
-
-      for (const lookup of lookups) {
-        Promise.resolve(lookup)
-          .then((theme) => {
-            if (theme?.bg) {
-              resolve(theme);
-            } else {
-              finishEmpty();
-            }
-          })
-          .catch(() => finishEmpty());
-      }
-    });
-  }
-
-  function getLittleZenChromePageTheme(win) {
-    const browser = win.gBrowser?.selectedBrowser;
-    const href = getLittleZenThemeUrl(win)?.href || "";
-    const browserHref = browser?.currentURI?.spec || "";
-    let docHref = "";
-    let theme = null;
-    try {
-      docHref = browser?.contentDocument?.location?.href || "";
-      const chromeThemeAllowed = !docHref || !browserHref || docHref === browserHref;
-      theme =
-        (chromeThemeAllowed ? getTopVisibleTheme(browser) : null) ||
-        (chromeThemeAllowed ? getThemeColorTheme(browser) : null) ||
-        (chromeThemeAllowed ? getThemeFromElement(browser?.contentDocument?.defaultView, browser?.contentDocument?.body, "body") : null) ||
-        (chromeThemeAllowed ? getThemeFromElement(browser?.contentDocument?.defaultView, browser?.contentDocument?.documentElement, "html") : null) ||
-        (chromeThemeAllowed ? getDocumentCanvasTheme(browser) : null);
-    } catch (error) {
-      log("Little Zen page theme probe failed", error);
-    }
-    theme =
-      theme ||
-      (href ? null : getNeutralHeaderShade(win)) ||
-      getChromeToolbarFallbackTheme(win);
-    return {
-      ...theme,
+      fg: chooseForeground(bgRgb),
+      source,
       href,
+      rgb: reading.rgb,
+      share: reading.share,
     };
+  }
+
+  function loadLittleZenSiteColors() {
+    if (littleZenSiteColors) {
+      return littleZenSiteColors;
+    }
+    littleZenSiteColors = new Map();
+    try {
+      const raw = Services.prefs.getStringPref(LITTLE_ZEN_SITE_COLORS_PREF, "{}");
+      littleZenSiteColors = new Map(Object.entries(JSON.parse(raw)));
+    } catch (error) {}
+    return littleZenSiteColors;
+  }
+
+  function persistLittleZenSiteColors() {
+    if (littleZenSiteColorsSaveTimer) {
+      return;
+    }
+    littleZenSiteColorsSaveTimer = setTimeout(() => {
+      littleZenSiteColorsSaveTimer = null;
+      try {
+        Services.prefs.setStringPref(
+          LITTLE_ZEN_SITE_COLORS_PREF,
+          JSON.stringify(Object.fromEntries(loadLittleZenSiteColors()))
+        );
+      } catch (error) {}
+    }, 20000);
+  }
+
+  function rememberLittleZenSiteColor(href, rgb) {
+    try {
+      const url = new URL(href);
+      if (!/^https?:$/i.test(url.protocol) || !url.hostname || !rgb) {
+        return;
+      }
+      const host = url.hostname.toLowerCase();
+      const colors = loadLittleZenSiteColors();
+      const value = rgb.join(",");
+      if (colors.get(host) === value) {
+        return;
+      }
+      colors.delete(host);
+      colors.set(host, value);
+      while (colors.size > LITTLE_ZEN_THEME_CACHE_LIMIT) {
+        colors.delete(colors.keys().next().value);
+      }
+      persistLittleZenSiteColors();
+    } catch (error) {}
+  }
+
+  function rememberedLittleZenSiteRgb(href) {
+    try {
+      const url = new URL(href);
+      if (!/^https?:$/i.test(url.protocol) || !url.hostname) {
+        return null;
+      }
+      const value = loadLittleZenSiteColors().get(url.hostname.toLowerCase());
+      return value ? value.split(",").map(Number) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function attachLittleZenSiteColorWatchers(win) {
+    if (win[PATCH_FLAGS.siteColor]) {
+      return;
+    }
+    win[PATCH_FLAGS.siteColor] = true;
+
+    const panels = win.document.getElementById("tabbrowser-tabpanels");
+    const onScrollInput = () => {
+      if (!isLittleWindow(win) || !getLittleZenThemeUrl(win)) {
+        return;
+      }
+      const now = Date.now();
+      const wait = Math.max(
+        0,
+        LITTLE_ZEN_SCROLL_SAMPLE_MS - (now - (win.__littleZenLastScrollSample || 0))
+      );
+      if (win.__littleZenScrollSampleTimer) {
+        return;
+      }
+      win.__littleZenScrollSampleTimer = win.setTimeout(() => {
+        win.__littleZenScrollSampleTimer = 0;
+        win.__littleZenLastScrollSample = Date.now();
+        updateLittleZenBlendedTheme(win, "scroll", { fromScroll: true });
+      }, wait);
+    };
+
+    panels?.addEventListener("wheel", onScrollInput, { passive: true, capture: true });
+    panels?.addEventListener("mouseup", onScrollInput, { capture: true });
+    win.addEventListener("keyup", (event) => {
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+        onScrollInput();
+      }
+    });
+
+    const check = () => {
+      if (!isLittleWindow(win) || win.document.hidden || !getLittleZenThemeUrl(win)) {
+        return;
+      }
+      updateLittleZenBlendedTheme(win, "drift-check", { fromScroll: true });
+    };
+    const intervalId = win.setInterval(check, 3000);
+    win.addEventListener("focus", () => win.setTimeout(check, 400));
+    win.addEventListener(
+      "unload",
+      () => {
+        win.clearInterval(intervalId);
+        if (win.__littleZenScrollSampleTimer) {
+          win.clearTimeout(win.__littleZenScrollSampleTimer);
+        }
+      },
+      { once: true }
+    );
   }
 
   function getLittleZenThemeUrl(win) {
@@ -2660,7 +2404,13 @@
   }
 
   function rememberLittleZenTheme(theme, href) {
-    if (!theme?.bg || !href || theme.source === "toolbar-fallback" || theme.source === "unknown-page") {
+    if (
+      !theme?.bg ||
+      !href ||
+      theme.source === "toolbar-fallback" ||
+      theme.source === "idle-chrome" ||
+      theme.source === "unknown-page"
+    ) {
       return;
     }
     for (const key of getLittleZenThemeCacheKeys(href)) {
@@ -2691,16 +2441,41 @@
 
     const root = win.document.documentElement;
     const url = getLittleZenThemeUrl(win);
-    const themeColor = theme?.bg || (
-      root.hasAttribute("zen-should-be-dark-mode")
-        ? "rgb(16, 18, 24)"
-        : "rgb(245, 247, 251)"
-    );
-    const themeRgb = parseCssRgb(themeColor) || (
-      root.hasAttribute("zen-should-be-dark-mode")
-        ? { r: 16, g: 18, b: 24 }
-        : { r: 245, g: 247, b: 251 }
-    );
+    const idle = !url;
+    root.toggleAttribute("zen-little-window-idle", idle);
+
+    if (idle) {
+      const idleTheme = theme?.source === "idle-chrome" ? theme : getLittleZenIdleChromeTheme(win);
+      const compactEmpty = root.hasAttribute("zen-has-empty-tab");
+      setCssVar(
+        root,
+        "--little-zen-page-header-background",
+        compactEmpty ? idleTheme.bg : null
+      );
+      setCssVar(
+        root,
+        "--little-zen-window-theme-background",
+        compactEmpty ? idleTheme.bg : null
+      );
+      setCssVar(root, "--blended-addressbar-frame-background");
+      setCssVar(root, "--blended-addressbar-window-tint-background");
+      setCssVar(root, "--little-zen-page-header-foreground", idleTheme.fg);
+      setCssVar(root, "--little-zen-theme-outline");
+      setCssVar(root, "--little-zen-page-outline");
+      setCssVar(
+        win.document.getElementById("zen-browser-background"),
+        "--blended-addressbar-window-tint-background"
+      );
+      log("Little Zen idle chrome uses Zen wallpaper and content plate", {
+        reason,
+        foreground: idleTheme.fg,
+      });
+      return;
+    }
+
+    const backdrop = getLittleZenOpaqueBackdrop(win);
+    const themeColor = flattenCssColorToOpaque(theme?.bg || rgbToCss(backdrop), backdrop);
+    const themeRgb = parseCssRgb(themeColor) || backdrop;
     const header = themeColor;
     const foreground = getStableHeaderForeground(themeRgb, theme?.fg);
     const windowBackground = themeColor;
@@ -2720,11 +2495,6 @@
     setCssVar(root, "--little-zen-page-outline", pageOutline);
     setCssVar(root, "--blended-addressbar-frame-background", windowBackground);
     setCssVar(root, "--blended-addressbar-window-tint-background", tintBackground);
-    setCssVar(
-      win.document.getElementById("zen-browser-background"),
-      "--blended-addressbar-window-tint-background",
-      tintBackground
-    );
     rememberLittleZenTheme(theme, theme.href || url?.href || "");
 
     log("Little Zen blended theme updated", {
@@ -2740,30 +2510,99 @@
     });
   }
 
-  async function updateLittleZenBlendedTheme(win, reason = "unknown") {
+  async function updateLittleZenBlendedTheme(win, reason = "unknown", options = {}) {
     if (!isLittleWindow(win)) {
       return;
     }
 
     const browser = win.gBrowser?.selectedBrowser;
     const expectedHref = getLittleZenThemeUrl(win)?.href || "";
-    const chromeTheme = getLittleZenChromePageTheme(win);
-    const rememberedTheme = getRememberedLittleZenTheme(expectedHref);
-    if (rememberedTheme?.bg && chromeTheme?.source === "toolbar-fallback") {
-      applyLittleZenResolvedTheme(win, rememberedTheme, `${reason}:retained`);
-    } else {
-      applyLittleZenResolvedTheme(win, chromeTheme, reason);
-    }
-
-    const contentTheme = await getLittleZenAsyncPageTheme(browser);
-    if (!contentTheme?.bg || !isLittleWindow(win)) {
+    if (!expectedHref) {
+      applyLittleZenResolvedTheme(win, getLittleZenIdleChromeTheme(win), `${reason}:idle`);
       return;
     }
+
+    const requestId = (win.__littleZenColorRequestId || 0) + 1;
+    win.__littleZenColorRequestId = requestId;
+
+    const rememberedRgb = rememberedLittleZenSiteRgb(expectedHref);
+    const rememberedTheme = getRememberedLittleZenTheme(expectedHref);
+    if (rememberedTheme?.bg) {
+      applyLittleZenResolvedTheme(win, rememberedTheme, `${reason}:retained`);
+    } else if (rememberedRgb) {
+      applyLittleZenResolvedTheme(
+        win,
+        themeFromLittleZenSample(
+          win,
+          { rgb: rememberedRgb, share: 1 },
+          expectedHref,
+          "host-cache"
+        ),
+        `${reason}:host`
+      );
+    }
+
+    let reading = null;
+    try {
+      reading = await sampleLittleZenTopColor(win, browser);
+    } catch (error) {
+      log("Little Zen page color sample failed", error);
+    }
+
+    if (
+      requestId !== win.__littleZenColorRequestId ||
+      browser !== win.gBrowser?.selectedBrowser ||
+      !isLittleWindow(win)
+    ) {
+      return;
+    }
+
     const currentHref = getLittleZenThemeUrl(win)?.href || "";
     if (expectedHref && currentHref && expectedHref !== currentHref) {
       return;
     }
-    applyLittleZenResolvedTheme(win, contentTheme, `${reason}:content`);
+    if (!reading?.rgb) {
+      return;
+    }
+    log("Little Zen sampled painted page top", {
+      reason,
+      href: expectedHref,
+      rgb: reading.rgb,
+      share: reading.share,
+      transparent: browser?.getAttribute("transparent") === "true",
+      remote: !!browser?.isRemoteBrowser,
+    });
+
+    if (!options.fromScroll && rememberedRgb && littleZenColorDistance(reading.rgb, rememberedRgb) > LITTLE_ZEN_CHECK_DISTANCE) {
+      const unsure = win.__littleZenUnsureColor;
+      if (!unsure || unsure.href !== expectedHref || littleZenColorDistance(reading.rgb, unsure.rgb) > LITTLE_ZEN_CHECK_DISTANCE) {
+        win.__littleZenUnsureColor = { href: expectedHref, rgb: reading.rgb };
+        win.setTimeout(
+          () => updateLittleZenBlendedTheme(win, `${reason}:recheck`),
+          LITTLE_ZEN_UNSURE_RECHECK_MS
+        );
+        return;
+      }
+    }
+    win.__littleZenUnsureColor = null;
+
+    if (options.fromScroll) {
+      const current = win.__littleZenCurrentSampleRgb;
+      if (reading.share < LITTLE_ZEN_MIN_COLOR_SHARE) {
+        return;
+      }
+      if (current && littleZenColorDistance(reading.rgb, current) <= LITTLE_ZEN_SAME_COLOR_DISTANCE) {
+        return;
+      }
+    }
+
+    const sampled = themeFromLittleZenSample(win, reading, expectedHref);
+    if (!sampled?.bg) {
+      return;
+    }
+    win.__littleZenCurrentSampleRgb = reading.rgb;
+    applyLittleZenResolvedTheme(win, sampled, `${reason}:sample`);
+    rememberLittleZenSiteColor(expectedHref, reading.rgb);
   }
 
   function getLittleWindowUrl(win) {
@@ -3513,6 +3352,7 @@
     patchZenUIManager(win);
     patchUrlbar(win);
     attachEmptyTabStateTracking(win);
+    attachLittleZenSiteColorWatchers(win);
     attachTransparentBrowserPrefSync(win);
     attachWindowControlsPrefSync(win);
     attachLittleWindowCloseButtonGuard(win);
