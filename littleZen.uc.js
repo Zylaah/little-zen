@@ -707,14 +707,6 @@
       };
     }
 
-    // Zen's trim owns domain-only display. Run it first, then strip the scheme.
-    const originalTrimURL = urlbar._zenTrimURL;
-    urlbar._zenTrimURL = function (value) {
-      const trimmed =
-        typeof originalTrimURL === "function" ? originalTrimURL.call(this, value) : value;
-      return formatLittleZenUrlbarValue(trimmed);
-    };
-
     urlbar[PATCH_FLAGS.urlbar] = true;
   }
 
@@ -878,35 +870,6 @@
     win[PATCH_FLAGS.urlbarDisableGuard] = true;
     closeLittleWindowUrlbar(win, "urlbar-disable-guard-attached");
     log("Attached Little Zen urlbar disable guard");
-  }
-
-  function formatLittleZenUrlbarValue(value) {
-    if (typeof value !== "string" || !value) {
-      return value;
-    }
-    if (!Services.prefs.getBoolPref("browser.urlbar.trimURLs", false)) {
-      return value;
-    }
-
-    let formatted = value;
-    if (Services.prefs.getBoolPref("browser.urlbar.trimHttps", false)) {
-      formatted = formatted.replace(/^https:\/\//i, "");
-    }
-    formatted = formatted.replace(/^http:\/\//i, "");
-
-    try {
-      const uri = new URL(value);
-      if (
-        formatted.endsWith("/") &&
-        uri.pathname === "/" &&
-        !uri.search &&
-        !uri.hash
-      ) {
-        formatted = formatted.slice(0, -1);
-      }
-    } catch (error) {}
-
-    return formatted;
   }
 
   function syncEmptyTabState(win, reason = "unknown") {
