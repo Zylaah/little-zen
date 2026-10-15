@@ -707,8 +707,12 @@
       };
     }
 
+    // Zen's trim owns domain-only display. Run it first, then strip the scheme.
+    const originalTrimURL = urlbar._zenTrimURL;
     urlbar._zenTrimURL = function (value) {
-      return formatLittleZenUrlbarValue(value);
+      const trimmed =
+        typeof originalTrimURL === "function" ? originalTrimURL.call(this, value) : value;
+      return formatLittleZenUrlbarValue(trimmed);
     };
 
     urlbar[PATCH_FLAGS.urlbar] = true;
