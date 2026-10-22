@@ -287,7 +287,8 @@
 :root[zen-little-window="true"] #zen-sidebar-icons,
 :root[zen-little-window="true"] #zen-sidebar-wrapper,
 :root[zen-little-window="true"] #zen-sidebar-web-panel-wrapper,
-:root[zen-little-window="true"] #PanelUI-menu-button {
+:root[zen-little-window="true"] #PanelUI-menu-button,
+:root[zen-little-window="true"] #zen-toggle-compact-mode {
   visibility: collapse !important;
   display: none !important;
   min-width: 0 !important;
