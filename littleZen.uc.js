@@ -2890,56 +2890,81 @@
       try {
         const checkTab = adoptedTab;
         const checkWin = mainWin;
-        checkWin.setTimeout(() => {
-          try {
-            const stillSelected = checkWin.gBrowser?.selectedTab === checkTab;
-            const selUrl =
-              checkWin.gBrowser?.selectedTab?.linkedBrowser?.currentURI?.spec ?? "";
-            const selIsBlank = selUrl === "about:blank" || selUrl === "about:newtab";
-            // Zen's async workspace settling can revert selection after our
-            // synchronous check (typically onto a blank tab). Repair only
-            // that failure: never yank the user off a real page they chose.
-            if (!stillSelected && (checkTab.hidden || selIsBlank)) {
-              log("transferTabToWorkspace: repairing transfer selection", {
-                hidden: !!checkTab.hidden,
-                selUrl,
-              });
-              try {
-                checkWin.gBrowser.selectedTab = checkTab;
-              } catch (repairError) {}
-              try {
-                checkWin.focus();
-              } catch (focusError) {}
-            }
-            let docActive = null;
-            let readyState = null;
-            let tabState = null;
-            try {
-              docActive = checkTab.linkedBrowser?.docShell?.isActive ?? null;
-            } catch (e) {}
-            try {
-              readyState = checkTab.linkedBrowser?.contentDocument?.readyState ?? null;
-            } catch (e) {}
-            try {
-              tabState = {
-                pending: checkTab.hasAttribute("pending"),
-                discarded: checkTab.hasAttribute("discarded"),
-                busy: checkTab.hasAttribute("busy"),
-                crashed: checkTab.hasAttribute("crashed"),
-              };
-            } catch (e) {}
-            log("transferTabToWorkspace: delayed transfer check", {
-              connected: checkTab.isConnected,
-              selected: checkWin.gBrowser?.selectedTab === checkTab,
-              hidden: !!checkTab.hidden,
-              currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
-              docActive,
-              readyState,
-              tabState,
-            });
-          } catch (error) {}
-        }, 1500);
+        checkWin.setTimeout(
+          () => verifyAndRepairTransfer(checkWin, checkTab, "settle-400"),
+          400
+        );
+        checkWin.setTimeout(
+          () => verifyAndRepairTransfer(checkWin, checkTab, "settle-1500"),
+          1500
+        );
       } catch (error) {}
+  // Zen's async workspace settling can leave the adopted tab selected
+  // but with an inactive docshell (blank paint despite the right URL), or
+  // revert selection onto a blank tab. Repair both, but never yank the user
+  // off a real page they chose themselves.
+  function verifyAndRepairTransfer(checkWin, checkTab, phase) {
+    try {
+      const stillSelected = checkWin.gBrowser?.selectedTab === checkTab;
+      const selUrl =
+        checkWin.gBrowser?.selectedTab?.linkedBrowser?.currentURI?.spec ?? "";
+      const selIsBlank = selUrl === "about:blank" || selUrl === "about:newtab";
+      if (!stillSelected && (checkTab.hidden || selIsBlank)) {
+        log("transferTabToWorkspace: repairing transfer selection", {
+          phase,
+          hidden: !!checkTab.hidden,
+          selUrl,
+        });
+        try {
+          checkWin.gBrowser.selectedTab = checkTab;
+        } catch (repairError) {}
+        try {
+          checkWin.focus();
+        } catch (focusError) {}
+      }
+      try {
+        const browser = checkTab.linkedBrowser;
+        const active =
+          checkWin.gBrowser?.selectedTab === checkTab &&
+          browser &&
+          !browser.docShellIsActive;
+        if (active) {
+          log("transferTabToWorkspace: reactivating adopted browser docshell", {
+            phase,
+            currentUrl: browser.currentURI?.spec ?? null,
+          });
+          browser.docShellIsActive = true;
+        }
+      } catch (activateError) {}
+      let docActive = null;
+      let readyState = null;
+      let tabState = null;
+      try {
+        docActive = checkTab.linkedBrowser?.docShell?.isActive ?? null;
+      } catch (e) {}
+      try {
+        readyState = checkTab.linkedBrowser?.contentDocument?.readyState ?? null;
+      } catch (e) {}
+      try {
+        tabState = {
+          pending: checkTab.hasAttribute("pending"),
+          discarded: checkTab.hasAttribute("discarded"),
+          busy: checkTab.hasAttribute("busy"),
+          crashed: checkTab.hasAttribute("crashed"),
+        };
+      } catch (e) {}
+      log("transferTabToWorkspace: delayed transfer check", {
+        phase,
+        connected: checkTab.isConnected,
+        selected: checkWin.gBrowser?.selectedTab === checkTab,
+        hidden: !!checkTab.hidden,
+        currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
+        docActive,
+        readyState,
+        tabState,
+      });
+    } catch (error) {}
+  }
       return adoptedTab;
     } catch (error) {
       log("transferTabToWorkspace: adoptTab failed", error);
