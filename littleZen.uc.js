@@ -2913,11 +2913,20 @@
             }
             let docActive = null;
             let readyState = null;
+            let tabState = null;
             try {
               docActive = checkTab.linkedBrowser?.docShell?.isActive ?? null;
             } catch (e) {}
             try {
               readyState = checkTab.linkedBrowser?.contentDocument?.readyState ?? null;
+            } catch (e) {}
+            try {
+              tabState = {
+                pending: checkTab.hasAttribute("pending"),
+                discarded: checkTab.hasAttribute("discarded"),
+                busy: checkTab.hasAttribute("busy"),
+                crashed: checkTab.hasAttribute("crashed"),
+              };
             } catch (e) {}
             log("transferTabToWorkspace: delayed transfer check", {
               connected: checkTab.isConnected,
@@ -2926,6 +2935,7 @@
               currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
               docActive,
               readyState,
+              tabState,
             });
           } catch (error) {}
         }, 1500);
