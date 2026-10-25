@@ -2892,11 +2892,40 @@
         const checkWin = mainWin;
         checkWin.setTimeout(() => {
           try {
+            const stillSelected = checkWin.gBrowser?.selectedTab === checkTab;
+            const selUrl =
+              checkWin.gBrowser?.selectedTab?.linkedBrowser?.currentURI?.spec ?? "";
+            const selIsBlank = selUrl === "about:blank" || selUrl === "about:newtab";
+            // Zen's async workspace settling can revert selection after our
+            // synchronous check (typically onto a blank tab). Repair only
+            // that failure: never yank the user off a real page they chose.
+            if (!stillSelected && (checkTab.hidden || selIsBlank)) {
+              log("transferTabToWorkspace: repairing transfer selection", {
+                hidden: !!checkTab.hidden,
+                selUrl,
+              });
+              try {
+                checkWin.gBrowser.selectedTab = checkTab;
+              } catch (repairError) {}
+              try {
+                checkWin.focus();
+              } catch (focusError) {}
+            }
+            let docActive = null;
+            let readyState = null;
+            try {
+              docActive = checkTab.linkedBrowser?.docShell?.isActive ?? null;
+            } catch (e) {}
+            try {
+              readyState = checkTab.linkedBrowser?.contentDocument?.readyState ?? null;
+            } catch (e) {}
             log("transferTabToWorkspace: delayed transfer check", {
               connected: checkTab.isConnected,
               selected: checkWin.gBrowser?.selectedTab === checkTab,
               hidden: !!checkTab.hidden,
               currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
+              docActive,
+              readyState,
             });
           } catch (error) {}
         }, 1500);
