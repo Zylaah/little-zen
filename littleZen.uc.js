@@ -2886,12 +2886,19 @@
     try {
       // Live transfer: adopt the actual tab so session history, scroll
       // position, form state, logins and containers survive the move.
-      if (
-        tab &&
+      const canAdopt =
+        !!tab &&
         !tab.hasAttribute("zen-empty-tab") &&
-        tab.linkedBrowser &&
-        typeof mainWin.gBrowser?.adoptTab === "function"
-      ) {
+        !!tab.linkedBrowser &&
+        typeof mainWin.gBrowser?.adoptTab === "function";
+      log("transferTabToWorkspace: attempting live adopt", {
+        canAdopt,
+        hasTab: !!tab,
+        emptyTab: !!tab?.hasAttribute("zen-empty-tab"),
+        hasBrowser: !!tab?.linkedBrowser,
+        hasAdoptTab: typeof mainWin.gBrowser?.adoptTab,
+      });
+      if (canAdopt) {
         try {
           const knownTabs = new Set(mainWin.gBrowser.tabs);
           mainWin.gBrowser.adoptTab(tab, mainWin.gBrowser.tabs.length, true);
@@ -2900,7 +2907,24 @@
             adopted = mainWin.gBrowser.tabs.find(t => !knownTabs.has(t)) || null;
           }
           if (adopted) {
-            await placeTabInWorkspace(mainWin, adopted, workspaceId);
+            log("transferTabToWorkspace: adopted tab landed, placing in workspace", {
+              workspace: workspace.name,
+            });
+            const placed = await placeTabInWorkspace(mainWin, adopted, workspaceId);
+            if (!placed) {
+              // Never strand the adopted tab in a hidden workspace: leave
+              // it selected and visible in the current workspace instead.
+              log("transferTabToWorkspace: workspace placement failed, leaving tab visible", {
+                workspace: workspace.name,
+              });
+              try {
+                mainWin.gBrowser.selectedTab = adopted;
+              } catch (selectError) {}
+            } else {
+              log("transferTabToWorkspace: live transfer complete", {
+                workspace: workspace.name,
+              });
+            }
             mainWin.focus();
             return;
           }
@@ -2915,6 +2939,7 @@
         }
       }
 
+      log("transferTabToWorkspace: falling back to URL open", { url });
       if (typeof mainWin.gZenWorkspaces?.changeWorkspaceWithID === "function") {
         await mainWin.gZenWorkspaces.changeWorkspaceWithID(workspaceId);
       } else {
