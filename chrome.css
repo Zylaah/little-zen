@@ -575,13 +575,6 @@
   flex-shrink: 0;
 }
 
-/* Page controls sit directly in #nav-bar ahead of the picker, so they need
-   a lower flex order to actually render left of it. */
-:root[zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar > :is(#back-button, #forward-button, #stop-reload-button) {
-  order: -2;
-  flex-shrink: 0;
-}
-
 #zen-little-window-space-picker {
   display: flex !important;
   visibility: visible !important;
