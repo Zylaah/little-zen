@@ -1940,6 +1940,11 @@
     }
   }
 
+  function getWorkspaceContainerId(workspace) {
+    const containerId = Number.parseInt(workspace?.containerTabId ?? 0, 10);
+    return Number.isFinite(containerId) ? containerId : 0;
+  }
+
   function getTabContainerId(tab) {
     const containerId = Number.parseInt(tab?.getAttribute("usercontextid") ?? 0, 10);
     return Number.isFinite(containerId) ? containerId : 0;
@@ -2831,40 +2836,64 @@
     }
   }
 
-  function conformAdoptedBrowserToMainWindow(mainWin, adopted) {
+  async function adoptLiveTabIntoWorkspace(win, mainWin, workspaceId) {
+    const sourceTab = win.gBrowser?.selectedTab;
+    if (
+      !sourceTab ||
+      !mainWin?.gBrowser ||
+      typeof mainWin.gBrowser.adoptTab !== "function"
+    ) {
+      return null;
+    }
+
     try {
-      // Adopted browsers keep the little window's `transparent` flag, which
-      // the main window may not use. Conform to the sibling convention so
-      // the page composites exactly like every other main-window tab.
-      const browser = adopted?.linkedBrowser;
-      if (!browser) {
-        return;
+      sourceTab.removeAttribute("zen-empty-tab");
+      const adoptedTab = mainWin.gBrowser.adoptTab(sourceTab, {
+        tabIndex: Infinity,
+      });
+      if (!adoptedTab) {
+        return null;
       }
-      let siblingTransparent = false;
-      try {
-        for (const sibling of mainWin.gBrowser?.tabs ?? []) {
-          if (sibling !== adopted && sibling.linkedBrowser) {
-            siblingTransparent = sibling.linkedBrowser.hasAttribute("transparent");
-            break;
-          }
+
+      await placeTabInWorkspace(mainWin, adoptedTab, workspaceId);
+      mainWin.focus();
+      win.setTimeout(() => {
+        if (!win.closed) {
+          win.close();
         }
-      } catch (error) {}
-      const adoptedTransparent = browser.hasAttribute("transparent");
-      log("transferTabToWorkspace: conforming adopted browser transparency", {
-        adoptedTransparent,
-        siblingTransparent,
+      }, 150);
+
+      log("transferTabToWorkspace: adoptTab succeeded", {
+        sourceTabId: sourceTab.id ?? null,
+        adoptedTabId: adoptedTab.id ?? null,
       });
       try {
-        if (adoptedTransparent && !siblingTransparent) {
-          browser.removeAttribute("transparent");
-        } else if (!adoptedTransparent && siblingTransparent) {
-          browser.setAttribute("transparent", "true");
-        }
-      } catch (error) {
-        log("transferTabToWorkspace: transparency conform failed", error);
-      }
+        log("transferTabToWorkspace: post-transfer browser state", {
+          currentUrl: adoptedTab.linkedBrowser?.currentURI?.spec ?? null,
+          transparent: adoptedTab.linkedBrowser?.hasAttribute("transparent") ?? null,
+          remote: !!adoptedTab.linkedBrowser?.isRemoteBrowser,
+          hidden: !!adoptedTab.hidden,
+          selected: mainWin.gBrowser.selectedTab === adoptedTab,
+        });
+      } catch (stateError) {}
+      try {
+        const checkTab = adoptedTab;
+        const checkWin = mainWin;
+        checkWin.setTimeout(() => {
+          try {
+            log("transferTabToWorkspace: delayed transfer check", {
+              connected: checkTab.isConnected,
+              selected: checkWin.gBrowser?.selectedTab === checkTab,
+              hidden: !!checkTab.hidden,
+              currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
+            });
+          } catch (error) {}
+        }, 1500);
+      } catch (error) {}
+      return adoptedTab;
     } catch (error) {
-      log("transferTabToWorkspace: transparency conform failed", error);
+      log("transferTabToWorkspace: adoptTab failed", error);
+      return null;
     }
   }
 
@@ -2928,122 +2957,57 @@
       return;
     }
 
-    const tab = win.gBrowser?.selectedTab;
     const url = getLittleWindowUrl(win);
     log("Transferring tab to workspace", { url, workspace: workspace.name });
 
-    try {
-      // Live transfer: adopt the actual tab so session history, scroll
-      // position, form state, logins and containers survive the move.
-      const canAdopt =
-        !!tab &&
-        !tab.hasAttribute("zen-empty-tab") &&
-        !!tab.linkedBrowser &&
-        typeof mainWin.gBrowser?.adoptTab === "function";
-      log("transferTabToWorkspace: attempting live adopt", {
-        canAdopt,
-        hasTab: !!tab,
-        emptyTab: !!tab?.hasAttribute("zen-empty-tab"),
-        hasBrowser: !!tab?.linkedBrowser,
-        hasAdoptTab: typeof mainWin.gBrowser?.adoptTab,
-      });
-      if (canAdopt) {
-        try {
-          const knownTabs = new Set(mainWin.gBrowser.tabs);
-          // Zen and current Firefox take an options object here, not
-          // positional (index, select) args. Mirror Zen's own
-          // moveTabsToSyncedWorkspace: adopt at the end, select it, and
-          // attribute the target space up front.
-          let adopted =
-            mainWin.gBrowser.adoptTab(tab, {
-              tabIndex: Infinity,
-              selectTab: true,
-              spaceId: workspaceId,
-            }) || null;
-          if (!adopted || adopted.ownerGlobal !== mainWin) {
-            adopted =
-              mainWin.gBrowser.tabs.find(t => !knownTabs.has(t)) || null;
-          }
-          if (adopted) {
-            log("transferTabToWorkspace: adopted tab landed, placing in workspace", {
-              workspace: workspace.name,
-            });
-            conformAdoptedBrowserToMainWindow(mainWin, adopted);
-            const placed = await placeTabInWorkspace(mainWin, adopted, workspaceId);
-            if (!placed) {
-              // Never strand the adopted tab in a hidden workspace: leave
-              // it selected and visible in the current workspace instead.
-              log("transferTabToWorkspace: workspace placement failed, leaving tab visible", {
-                workspace: workspace.name,
-              });
-              try {
-                mainWin.gBrowser.selectedTab = adopted;
-              } catch (selectError) {}
-            } else {
-              log("transferTabToWorkspace: live transfer complete", {
-                workspace: workspace.name,
-              });
-            }
-            try {
-              log("transferTabToWorkspace: post-transfer browser state", {
-                currentUrl: adopted.linkedBrowser?.currentURI?.spec ?? null,
-                transparent: adopted.linkedBrowser?.hasAttribute("transparent") ?? null,
-                remote: !!adopted.linkedBrowser?.isRemoteBrowser,
-                hidden: !!adopted.hidden,
-                selected: mainWin.gBrowser.selectedTab === adopted,
-              });
-            } catch (stateError) {}
-            try {
-              const checkTab = adopted;
-              const checkWin = mainWin;
-              checkWin.setTimeout(() => {
-                try {
-                  log("transferTabToWorkspace: delayed transfer check", {
-                    connected: checkTab.isConnected,
-                    selected: checkWin.gBrowser?.selectedTab === checkTab,
-                    hidden: !!checkTab.hidden,
-                    currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
-                  });
-                } catch (error) {}
-              }, 1500);
-            } catch (error) {}
-            mainWin.focus();
-            return;
-          }
-          log("transferTabToWorkspace: adoptTab did not land a tab, falling back to URL open");
-        } catch (adoptError) {
-          log("transferTabToWorkspace: live adopt failed, falling back to URL open", adoptError);
-        }
-        if (!win.gBrowser?.tabs?.includes(tab)) {
-          // The tab already left the little window; don't duplicate it.
-          mainWin.focus();
-          return;
-        }
+    // Fallback: open URL in a new tab in the target workspace (causes reload)
+    const doFallback = async () => {
+      if (!url) {
+        mainWin.focus();
+        win.close();
+        return;
       }
-
-      log("transferTabToWorkspace: falling back to URL open", { url });
-      if (typeof mainWin.gZenWorkspaces?.changeWorkspaceWithID === "function") {
-        await mainWin.gZenWorkspaces.changeWorkspaceWithID(workspaceId);
-      } else {
-        await mainWin.gZenWorkspaces?.changeWorkspace?.(workspace);
-      }
-      if (url) {
-        const newTab = mainWin.gBrowser.addTab(url, {
-          triggeringPrincipal:
-            Services.scriptSecurityManager.getSystemPrincipal(),
-          skipRoute: true,
-        });
-        mainWin.gBrowser.selectedTab = newTab;
-      }
-      mainWin.focus();
-    } catch (error) {
-      log("transferTabToWorkspace failed", error);
-    } finally {
       try {
-        if (!win.closed) {
-          win.close();
+        const addTabOptions = {
+          triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+          skipAnimation: true,
+          skipRoute: true,
+        };
+        const fallbackContainerId = getWorkspaceContainerId(workspace);
+        if (fallbackContainerId) {
+          addTabOptions.userContextId = fallbackContainerId;
         }
-      } catch (error) {}
+        const newTab = mainWin.gBrowser.addTab(url, addTabOptions);
+        if (newTab) {
+          await placeTabInWorkspace(mainWin, newTab, workspaceId);
+        }
+        mainWin.focus();
+      } catch (e) {
+        log("transferTabToWorkspace fallback error", e);
+      }
+      win.close();
+    };
+
+    const ourBrowser = win.gBrowser?.selectedBrowser;
+
+    // If there's no live content to transfer, just switch workspace and close
+    if (!ourBrowser || !url) {
+      try {
+        await mainWin.gZenWorkspaces?.changeWorkspace?.(workspace);
+      } catch (e) {}
+      mainWin.focus();
+      win.close();
+      return;
+    }
+
+    try {
+      const adoptedTab = await adoptLiveTabIntoWorkspace(win, mainWin, workspaceId);
+      if (!adoptedTab) {
+        await doFallback();
+      }
+    } catch (err) {
+      log("transferTabToWorkspace: live transfer failed, falling back", err);
+      await doFallback();
     }
   }
 
