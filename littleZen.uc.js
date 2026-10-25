@@ -1541,20 +1541,43 @@
       return;
     }
 
-    const left = syncLittleWindowControlSide(win);
-    if (left) {
-      if (navBar.firstElementChild !== buttons) {
-        navBar.prepend(buttons);
-        log("Moved Little Zen window controls to the start of the navbar");
+    withToolbarBatchUpdate(win, () => {
+      const left = syncLittleWindowControlSide(win);
+      if (left) {
+        if (navBar.firstElementChild !== buttons) {
+          navBar.prepend(buttons);
+          log("Moved Little Zen window controls to the start of the navbar");
+        }
+      } else if (navBar.lastElementChild !== buttons) {
+        navBar.append(buttons);
+        log("Moved Little Zen window controls to the end of the navbar");
       }
-    } else if (navBar.lastElementChild !== buttons) {
-      navBar.append(buttons);
-      log("Moved Little Zen window controls to the end of the navbar");
-    }
+    });
 
     for (const extra of win.document.querySelectorAll(".titlebar-buttonbox-container")) {
       extra.toggleAttribute("little-zen-unused-controls", extra !== buttons);
     }
+  }
+
+  // CustomizableUI watches toolbar DOM and "repairs" areas when nodes move,
+  // which throws when our shuffle lands mid-rebuild. Batch our mutations so
+  // the reconciler only ever sees the settled DOM. Nesting-safe (counter).
+  function withToolbarBatchUpdate(win, fn) {
+    const cui = win.CustomizableUI;
+    if (
+      cui &&
+      typeof cui.beginBatchUpdate === "function" &&
+      typeof cui.endBatchUpdate === "function"
+    ) {
+      cui.beginBatchUpdate();
+      try {
+        fn();
+      } finally {
+        cui.endBatchUpdate();
+      }
+      return;
+    }
+    fn();
   }
 
   function positionLittleWindowNavbar(win) {
@@ -1562,31 +1585,33 @@
       return;
     }
 
-    const navBar = win.document.getElementById("nav-bar");
-    const navContainer = win.document.getElementById(
-      "zen-appcontent-navbar-container"
-    );
-    if (navBar && navContainer && navBar.parentElement !== navContainer) {
-      navContainer.appendChild(navBar);
-      log("Moved Little Zen navbar above page content");
-    }
+    withToolbarBatchUpdate(win, () => {
+      const navBar = win.document.getElementById("nav-bar");
+      const navContainer = win.document.getElementById(
+        "zen-appcontent-navbar-container"
+      );
+      if (navBar && navContainer && navBar.parentElement !== navContainer) {
+        navContainer.appendChild(navBar);
+        log("Moved Little Zen navbar above page content");
+      }
 
-    // NOTE: registered toolbar widgets (back/forward/reload) must stay
-    // inside #nav-bar-customization-target. Moving them out breaks
-    // CustomizableUI area rebuilds (insertWidgetBefore throws).
-    const target = win.document.getElementById("nav-bar-customization-target");
-    const urlbar = win.document.getElementById("urlbar-container");
-    if (target && urlbar?.parentElement === target) {
-      for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
-        const item = win.document.getElementById(id);
-        if (item) {
-          target.insertBefore(item, urlbar);
+      // NOTE: registered toolbar widgets (back/forward/reload) must stay
+      // inside #nav-bar-customization-target. Moving them out breaks
+      // CustomizableUI area rebuilds (insertWidgetBefore throws).
+      const target = win.document.getElementById("nav-bar-customization-target");
+      const urlbar = win.document.getElementById("urlbar-container");
+      if (target && urlbar?.parentElement === target) {
+        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
+          const item = win.document.getElementById(id);
+          if (item) {
+            target.insertBefore(item, urlbar);
+          }
         }
       }
-    }
 
-    positionLittleWindowButtons(win);
-    positionLittleWindowSpacePicker(win);
+      positionLittleWindowButtons(win);
+      positionLittleWindowSpacePicker(win);
+    });
   }
 
   function attachWindowControlsPrefSync(win) {
@@ -2837,8 +2862,15 @@
       await placeTabInWorkspace(mainWin, adoptedTab, workspaceId);
       mainWin.focus();
       win.setTimeout(() => {
-        if (!win.closed) {
-          win.close();
+        try {
+          if (!win.closed) {
+            win.close();
+          }
+          log("transferTabToWorkspace: little window close attempted", {
+            closed: win.closed,
+          });
+        } catch (error) {
+          log("transferTabToWorkspace: little window close failed", error);
         }
       }, 150);
 
@@ -3352,34 +3384,38 @@
     // controls, picker, urlbar. Registered toolbar widgets must stay in
     // their area: moving them out breaks CustomizableUI rebuilds.
     if (!leftControls && navBar && target?.parentElement === navBar) {
-      const urlbar = win.document.getElementById("urlbar-container");
-      if (urlbar?.parentElement === target) {
-        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
-          const item = win.document.getElementById(id);
-          if (item) {
-            target.insertBefore(item, urlbar);
+      withToolbarBatchUpdate(win, () => {
+        const urlbar = win.document.getElementById("urlbar-container");
+        if (urlbar?.parentElement === target) {
+          for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
+            const item = win.document.getElementById(id);
+            if (item) {
+              target.insertBefore(item, urlbar);
+            }
           }
+          const needsMove =
+            picker.parentElement !== target || picker.nextElementSibling !== urlbar;
+          target.insertBefore(picker, urlbar);
+          if (needsMove) {
+            log("Moved Little Zen space picker left of the urlbar");
+          }
+          return;
         }
-        const needsMove =
-          picker.parentElement !== target || picker.nextElementSibling !== urlbar;
-        target.insertBefore(picker, urlbar);
-        if (needsMove) {
-          log("Moved Little Zen space picker left of the urlbar");
+        if (picker.nextElementSibling !== target) {
+          navBar.insertBefore(picker, target);
+          log("Moved Little Zen space picker to the left of the navbar");
         }
-        return;
-      }
-      if (picker.nextElementSibling !== target) {
-        navBar.insertBefore(picker, target);
-        log("Moved Little Zen space picker to the left of the navbar");
-      }
+      });
       return;
     }
 
     if (leftControls && spring2) {
-      if (picker.parentElement !== spring2) {
-        spring2.appendChild(picker);
-        log("Moved Little Zen space picker into the right-side navbar spring");
-      }
+      withToolbarBatchUpdate(win, () => {
+        if (picker.parentElement !== spring2) {
+          spring2.appendChild(picker);
+          log("Moved Little Zen space picker into the right-side navbar spring");
+        }
+      });
       return;
     }
 
