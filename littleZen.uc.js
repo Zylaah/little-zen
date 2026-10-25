@@ -1574,10 +1574,24 @@
     const target = win.document.getElementById("nav-bar-customization-target");
     const urlbar = win.document.getElementById("urlbar-container");
     if (target && urlbar?.parentElement === target) {
-      for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
-        const item = win.document.getElementById(id);
-        if (item) {
-          target.insertBefore(item, urlbar);
+      const leftControls = syncLittleWindowControlSide(win);
+      if (leftControls) {
+        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
+          const item = win.document.getElementById(id);
+          if (item) {
+            target.insertBefore(item, urlbar);
+          }
+        }
+      } else {
+        // Window controls sit on the right, so keep page controls beside
+        // them on the right-hand side of the urlbar.
+        let anchor = urlbar;
+        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
+          const item = win.document.getElementById(id);
+          if (item) {
+            target.insertBefore(item, anchor.nextSibling);
+            anchor = item;
+          }
         }
       }
     }
