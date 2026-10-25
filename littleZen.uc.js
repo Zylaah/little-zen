@@ -1557,6 +1557,39 @@
     }
   }
 
+  function positionLittleWindowPageControls(win) {
+    const navBar = win.document.getElementById("nav-bar");
+    const target = win.document.getElementById("nav-bar-customization-target");
+    const urlbar = win.document.getElementById("urlbar-container");
+    if (!target || urlbar?.parentElement !== target) {
+      return;
+    }
+
+    const ids = ["back-button", "forward-button", "stop-reload-button"];
+    const leftControls = syncLittleWindowControlSide(win);
+    const picker = win.document.getElementById("zen-little-window-space-picker");
+    if (!leftControls && picker && navBar && picker.parentElement === navBar) {
+      // Window controls sit on the right, so keep page controls on the far
+      // left, immediately before the space picker.
+      for (const id of ids) {
+        const item = win.document.getElementById(id);
+        if (item) {
+          navBar.insertBefore(item, picker);
+        }
+      }
+      return;
+    }
+
+    // Window controls on the left (or picker not placed yet): keep page
+    // controls on the left-hand side of the urlbar.
+    for (const id of ids) {
+      const item = win.document.getElementById(id);
+      if (item) {
+        target.insertBefore(item, urlbar);
+      }
+    }
+  }
+
   function positionLittleWindowNavbar(win) {
     if (!isLittleWindow(win)) {
       return;
@@ -1571,30 +1604,7 @@
       log("Moved Little Zen navbar above page content");
     }
 
-    const target = win.document.getElementById("nav-bar-customization-target");
-    const urlbar = win.document.getElementById("urlbar-container");
-    if (target && urlbar?.parentElement === target) {
-      const leftControls = syncLittleWindowControlSide(win);
-      if (leftControls) {
-        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
-          const item = win.document.getElementById(id);
-          if (item) {
-            target.insertBefore(item, urlbar);
-          }
-        }
-      } else {
-        // Window controls sit on the right, so keep page controls beside
-        // them on the right-hand side of the urlbar.
-        let anchor = urlbar;
-        for (const id of ["back-button", "forward-button", "stop-reload-button"]) {
-          const item = win.document.getElementById(id);
-          if (item) {
-            target.insertBefore(item, anchor.nextSibling);
-            anchor = item;
-          }
-        }
-      }
-    }
+    positionLittleWindowPageControls(win);
 
     positionLittleWindowButtons(win);
     positionLittleWindowSpacePicker(win);
@@ -3224,6 +3234,7 @@
         navBar.insertBefore(picker, target);
         log("Moved Little Zen space picker to the left of the navbar");
       }
+      positionLittleWindowPageControls(win);
       return;
     }
 
