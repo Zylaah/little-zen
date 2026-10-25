@@ -343,6 +343,11 @@
   height: auto !important;
 }
 
+/* Breathing room between the window edge and far-left window controls. */
+:root[zen-little-window="true"][zen-window-buttons-reversed="true"] .titlebar-buttonbox-container {
+  padding-inline-start: 12px !important;
+}
+
 :root[zen-little-window="true"] .titlebar-buttonbox-container[little-zen-unused-controls] {
   display: none !important;
 }

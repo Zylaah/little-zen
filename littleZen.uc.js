@@ -2831,6 +2831,43 @@
     }
   }
 
+  function conformAdoptedBrowserToMainWindow(mainWin, adopted) {
+    try {
+      // Adopted browsers keep the little window's `transparent` flag, which
+      // the main window may not use. Conform to the sibling convention so
+      // the page composites exactly like every other main-window tab.
+      const browser = adopted?.linkedBrowser;
+      if (!browser) {
+        return;
+      }
+      let siblingTransparent = false;
+      try {
+        for (const sibling of mainWin.gBrowser?.tabs ?? []) {
+          if (sibling !== adopted && sibling.linkedBrowser) {
+            siblingTransparent = sibling.linkedBrowser.hasAttribute("transparent");
+            break;
+          }
+        }
+      } catch (error) {}
+      const adoptedTransparent = browser.hasAttribute("transparent");
+      log("transferTabToWorkspace: conforming adopted browser transparency", {
+        adoptedTransparent,
+        siblingTransparent,
+      });
+      try {
+        if (adoptedTransparent && !siblingTransparent) {
+          browser.removeAttribute("transparent");
+        } else if (!adoptedTransparent && siblingTransparent) {
+          browser.setAttribute("transparent", "true");
+        }
+      } catch (error) {
+        log("transferTabToWorkspace: transparency conform failed", error);
+      }
+    } catch (error) {
+      log("transferTabToWorkspace: transparency conform failed", error);
+    }
+  }
+
   async function placeTabInWorkspace(mainWin, tab, workspaceId) {
     const workspaces = mainWin?.gZenWorkspaces;
     if (!workspaces || !tab || !workspaceId) {
@@ -2838,10 +2875,11 @@
     }
 
     try {
+      // Stamp the workspace first so Zen's visibility logic never sees an
+      // unassigned tab, even if the move below silently no-ops.
+      tab.setAttribute("zen-workspace-id", workspaceId);
       if (typeof workspaces.moveTabToWorkspace === "function") {
         workspaces.moveTabToWorkspace(tab, workspaceId);
-      } else {
-        tab.setAttribute("zen-workspace-id", workspaceId);
       }
 
       if (workspaces.lastSelectedWorkspaceTabs) {
@@ -2859,7 +2897,18 @@
 
       mainWin.gBrowser.selectedTab = tab;
       mainWin.gBrowser.selectedBrowser?.focus?.();
-      return true;
+
+      const verified =
+        mainWin.gBrowser.selectedTab === tab &&
+        tab.getAttribute("zen-workspace-id") === workspaceId;
+      log("placeTabInWorkspace result", {
+        placed: verified,
+        selected: mainWin.gBrowser.selectedTab === tab,
+        workspaceAttr: tab.getAttribute("zen-workspace-id"),
+        hidden: !!tab.hidden,
+        workspaceId,
+      });
+      return verified;
     } catch (error) {
       log("placeTabInWorkspace failed", error);
       return false;
@@ -2910,6 +2959,7 @@
             log("transferTabToWorkspace: adopted tab landed, placing in workspace", {
               workspace: workspace.name,
             });
+            conformAdoptedBrowserToMainWindow(mainWin, adopted);
             const placed = await placeTabInWorkspace(mainWin, adopted, workspaceId);
             if (!placed) {
               // Never strand the adopted tab in a hidden workspace: leave
@@ -2925,6 +2975,29 @@
                 workspace: workspace.name,
               });
             }
+            try {
+              log("transferTabToWorkspace: post-transfer browser state", {
+                currentUrl: adopted.linkedBrowser?.currentURI?.spec ?? null,
+                transparent: adopted.linkedBrowser?.hasAttribute("transparent") ?? null,
+                remote: !!adopted.linkedBrowser?.isRemoteBrowser,
+                hidden: !!adopted.hidden,
+                selected: mainWin.gBrowser.selectedTab === adopted,
+              });
+            } catch (stateError) {}
+            try {
+              const checkTab = adopted;
+              const checkWin = mainWin;
+              checkWin.setTimeout(() => {
+                try {
+                  log("transferTabToWorkspace: delayed transfer check", {
+                    connected: checkTab.isConnected,
+                    selected: checkWin.gBrowser?.selectedTab === checkTab,
+                    hidden: !!checkTab.hidden,
+                    currentUrl: checkTab.linkedBrowser?.currentURI?.spec ?? null,
+                  });
+                } catch (error) {}
+              }, 1500);
+            } catch (error) {}
             mainWin.focus();
             return;
           }
