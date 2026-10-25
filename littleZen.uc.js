@@ -2831,6 +2831,41 @@
     }
   }
 
+  async function placeTabInWorkspace(mainWin, tab, workspaceId) {
+    const workspaces = mainWin?.gZenWorkspaces;
+    if (!workspaces || !tab || !workspaceId) {
+      return false;
+    }
+
+    try {
+      if (typeof workspaces.moveTabToWorkspace === "function") {
+        workspaces.moveTabToWorkspace(tab, workspaceId);
+      } else {
+        tab.setAttribute("zen-workspace-id", workspaceId);
+      }
+
+      if (workspaces.lastSelectedWorkspaceTabs) {
+        workspaces.lastSelectedWorkspaceTabs[workspaceId] = tab;
+      }
+
+      if (typeof workspaces.changeWorkspaceWithID === "function") {
+        await workspaces.changeWorkspaceWithID(workspaceId);
+      } else {
+        const workspace = getWorkspaceById(mainWin, workspaceId);
+        if (workspace) {
+          await workspaces.changeWorkspace?.(workspace);
+        }
+      }
+
+      mainWin.gBrowser.selectedTab = tab;
+      mainWin.gBrowser.selectedBrowser?.focus?.();
+      return true;
+    } catch (error) {
+      log("placeTabInWorkspace failed", error);
+      return false;
+    }
+  }
+
   async function transferTabToWorkspace(win, workspaceId) {
     const mainWin = getMainBrowserWindow(win);
     if (!mainWin) {
@@ -2844,10 +2879,42 @@
       return;
     }
 
+    const tab = win.gBrowser?.selectedTab;
     const url = getLittleWindowUrl(win);
     log("Transferring tab to workspace", { url, workspace: workspace.name });
 
     try {
+      // Live transfer: adopt the actual tab so session history, scroll
+      // position, form state, logins and containers survive the move.
+      if (
+        tab &&
+        !tab.hasAttribute("zen-empty-tab") &&
+        tab.linkedBrowser &&
+        typeof mainWin.gBrowser?.adoptTab === "function"
+      ) {
+        try {
+          const knownTabs = new Set(mainWin.gBrowser.tabs);
+          mainWin.gBrowser.adoptTab(tab, mainWin.gBrowser.tabs.length, true);
+          let adopted = mainWin.gBrowser.selectedTab;
+          if (!adopted || adopted.ownerGlobal !== mainWin || knownTabs.has(adopted)) {
+            adopted = mainWin.gBrowser.tabs.find(t => !knownTabs.has(t)) || null;
+          }
+          if (adopted) {
+            await placeTabInWorkspace(mainWin, adopted, workspaceId);
+            mainWin.focus();
+            return;
+          }
+          log("transferTabToWorkspace: adoptTab did not land a tab, falling back to URL open");
+        } catch (adoptError) {
+          log("transferTabToWorkspace: live adopt failed, falling back to URL open", adoptError);
+        }
+        if (!win.gBrowser?.tabs?.includes(tab)) {
+          // The tab already left the little window; don't duplicate it.
+          mainWin.focus();
+          return;
+        }
+      }
+
       if (typeof mainWin.gZenWorkspaces?.changeWorkspaceWithID === "function") {
         await mainWin.gZenWorkspaces.changeWorkspaceWithID(workspaceId);
       } else {
@@ -2865,7 +2932,11 @@
     } catch (error) {
       log("transferTabToWorkspace failed", error);
     } finally {
-      win.close();
+      try {
+        if (!win.closed) {
+          win.close();
+        }
+      } catch (error) {}
     }
   }
 
