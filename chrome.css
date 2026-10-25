@@ -938,7 +938,7 @@
   background-color: var(--urlbar-box-hover-bgcolor, var(--toolbarbutton-background-color-hover)) !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button {
+:root[zen-little-window="true"][zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar .titlebar-button {
   color: var(--little-zen-page-header-foreground, var(--zen-tab-header-foreground, currentColor)) !important;
   --toolbarbutton-background-color-hover: color-mix(
     in srgb,
@@ -952,15 +952,15 @@
   ) !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover {
+:root[zen-little-window="true"][zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover {
   background-color: var(--toolbarbutton-background-color-hover) !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover:active {
+:root[zen-little-window="true"][zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover:active {
   background-color: var(--toolbarbutton-background-color-active) !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button > .toolbarbutton-icon {
+:root[zen-little-window="true"][zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar .titlebar-button > .toolbarbutton-icon {
   stroke: currentColor !important;
   fill: currentColor !important;
 }
