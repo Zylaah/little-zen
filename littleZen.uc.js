@@ -71,6 +71,9 @@
   const { AppConstants } = ChromeUtils.importESModule(
     "resource://gre/modules/AppConstants.sys.mjs"
   );
+  const { NetUtil } = ChromeUtils.importESModule(
+    "resource://gre/modules/NetUtil.sys.mjs"
+  );
   const { ClickHandlerParent } = ChromeUtils.importESModule(
     "resource:///actors/ClickHandlerParent.sys.mjs"
   );
@@ -231,6 +234,294 @@
       (typeof context === "number" &&
         !!(context & Ci.nsIWebNavigation.LOAD_FLAGS_FROM_EXTERNAL))
     );
+  }
+
+  function isAutomaticDownloadURL(uriOrSpec) {
+    let uri = uriOrSpec;
+    if (!uri) {
+      return false;
+    }
+    if (typeof uriOrSpec === "string") {
+      try {
+        uri = Services.io.newURI(uriOrSpec);
+      } catch (error) {
+        return false;
+      }
+    }
+
+    let decoded = uri.spec ?? "";
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch (error) {}
+    if (/content-disposition\s*=\s*attachment/i.test(decoded)) {
+      return true;
+    }
+
+    let extension = "";
+    try {
+      extension = uri.QueryInterface(Ci.nsIURL).fileExtension.toLowerCase();
+    } catch (error) {
+      return false;
+    }
+    if (!extension) {
+      return false;
+    }
+
+    // Server-rendered pages often use these suffixes even though Firefox
+    // would not treat the extension as something it can display.
+    if (
+      new Set([
+        "html",
+        "htm",
+        "xhtml",
+        "shtml",
+        "php",
+        "phtml",
+        "asp",
+        "aspx",
+        "jsp",
+        "jspx",
+        "cgi",
+        "cfm",
+      ]).has(extension)
+    ) {
+      return false;
+    }
+
+    try {
+      const mimeService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
+      const type = mimeService.getTypeFromExtension(extension);
+      if (
+        !type ||
+        type === "text/html" ||
+        type === "application/xhtml+xml" ||
+        type === "text/plain" ||
+        type === "application/pdf" ||
+        type.startsWith("image/") ||
+        type.startsWith("video/") ||
+        type.startsWith("audio/")
+      ) {
+        return false;
+      }
+
+      const info = mimeService.getFromTypeAndExtension(type, extension);
+      const action = info?.preferredAction;
+      return (
+        action === Ci.nsIHandlerInfo.saveToDisk ||
+        action === Ci.nsIHandlerInfo.useHelperApp ||
+        action === Ci.nsIHandlerInfo.useSystemDefault ||
+        (action === Ci.nsIHandlerInfo.alwaysAsk && !!info.alwaysAskBeforeHandling)
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function shouldOpenExternalLinkInLittleZen(url) {
+    if (!url || isAutomaticDownloadURL(url)) {
+      if (url) {
+        log("Skipping Little Zen for a download link", { url });
+      }
+      return false;
+    }
+    return true;
+  }
+
+  function responseIsDirectDownload(channel) {
+    let disposition = Ci.nsIChannel.DISPOSITION_INLINE;
+    try {
+      disposition = channel.contentDisposition;
+    } catch (error) {}
+    if (disposition === Ci.nsIChannel.DISPOSITION_ATTACHMENT) {
+      return true;
+    }
+
+    let type = "";
+    try {
+      type = String(channel.contentType || "").split(";")[0].trim().toLowerCase();
+    } catch (error) {}
+    if (!type) {
+      return false;
+    }
+    if (
+      type === "text/html" ||
+      type === "application/xhtml+xml" ||
+      type === "text/plain" ||
+      type === "application/pdf" ||
+      type === "application/json" ||
+      type === "text/xml" ||
+      type === "application/xml" ||
+      type.startsWith("image/") ||
+      type.startsWith("video/") ||
+      type.startsWith("audio/")
+    ) {
+      return false;
+    }
+    if (type === "application/octet-stream") {
+      return true;
+    }
+
+    try {
+      const mimeService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
+      const info = mimeService.getFromTypeAndExtension(type, "");
+      const action = info?.preferredAction;
+      return (
+        action === Ci.nsIHandlerInfo.saveToDisk ||
+        action === Ci.nsIHandlerInfo.useHelperApp ||
+        action === Ci.nsIHandlerInfo.useSystemDefault ||
+        (action === Ci.nsIHandlerInfo.alwaysAsk && !!info.alwaysAskBeforeHandling)
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function probeDirectDownload(url) {
+    return new Promise(resolve => {
+      let settled = false;
+      let channel = null;
+      let timer = null;
+      const finish = isDownload => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          timer?.cancel();
+        } catch (error) {}
+        try {
+          channel?.cancel(Components.results.NS_BINDING_ABORTED);
+        } catch (error) {}
+        resolve(!!isDownload);
+      };
+
+      timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+      timer.initWithCallback(
+        () => {
+          log("Download check timed out; opening Little Zen", { url });
+          finish(false);
+        },
+        4000,
+        Ci.nsITimer.TYPE_ONE_SHOT
+      );
+
+      try {
+        channel = NetUtil.newChannel({
+          uri: url,
+          loadingPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+          securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+          contentPolicyType: Ci.nsIContentPolicy.TYPE_DOCUMENT,
+        });
+        channel.asyncOpen({
+          onStartRequest(request) {
+            let isDownload = false;
+            try {
+              isDownload = responseIsDirectDownload(request);
+            } catch (error) {}
+            log("Checked external link before opening Little Zen", {
+              url,
+              isDownload,
+            });
+            finish(isDownload);
+          },
+          onDataAvailable(_request, stream, _offset, count) {
+            try {
+              const binary = Cc["@mozilla.org/binaryinputstream;1"].createInstance(
+                Ci.nsIBinaryInputStream
+              );
+              binary.setInputStream(stream);
+              binary.readBytes(count);
+            } catch (error) {}
+          },
+          onStopRequest() {
+            finish(false);
+          },
+        });
+      } catch (error) {
+        log("Could not check external link before opening Little Zen", error);
+        finish(false);
+      }
+    });
+  }
+
+  function openExternalInLittleZenOrNormal(win, url, openLittleZen, openNormally) {
+    if (!shouldOpenExternalLinkInLittleZen(url)) {
+      openNormally();
+      return;
+    }
+
+    probeDirectDownload(url).then(isDownload => {
+      if (isDownload) {
+        log("Skipping Little Zen after checking the response", { url });
+        if (!win.closed) {
+          openNormally();
+        }
+        return;
+      }
+      if (!win.closed) {
+        openLittleZen();
+      }
+    });
+  }
+
+  function urlsMatch(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+    try {
+      return Services.io.newURI(left).specIgnoringRef === Services.io.newURI(right).specIgnoringRef;
+    } catch (error) {
+      return left === right;
+    }
+  }
+
+  function closeLittleWindowsStuckOnDownload(url) {
+    for (const win of browserWindows()) {
+      if (!isLittleWindow(win) || win.closed) {
+        continue;
+      }
+      const stillLoading = win.document?.documentElement?.hasAttribute(
+        "zen-little-window-loading"
+      );
+      const openedForDownload =
+        urlsMatch(win.__littleZenPendingURL, url) ||
+        urlsMatch(win.__littleZenRoutedURL, url) ||
+        urlsMatch(win.gBrowser?.selectedBrowser?.currentURI?.spec, url);
+      if (!stillLoading || !openedForDownload) {
+        continue;
+      }
+      log("Closing Little Zen window stuck on a download", { url });
+      win.close();
+    }
+  }
+
+  function attachDownloadBypass() {
+    if (attachDownloadBypass.done) {
+      return;
+    }
+    attachDownloadBypass.done = true;
+
+    let downloadsModule;
+    try {
+      downloadsModule = ChromeUtils.importESModule(
+        "resource://gre/modules/Downloads.sys.mjs"
+      );
+    } catch (error) {
+      log("Could not watch downloads for Little Zen bypass", error);
+      return;
+    }
+
+    downloadsModule.Downloads.getList(downloadsModule.Downloads.ALL)
+      .then(list =>
+        list.addView({
+          onDownloadAdded(download) {
+            closeLittleWindowsStuckOnDownload(download?.source?.url);
+          },
+        })
+      )
+      .catch(error => {
+        log("Could not watch downloads for Little Zen bypass", error);
+      });
   }
 
   function getLittleWindowState(win) {
@@ -425,12 +716,29 @@
         });
 
         if (isExternal && url) {
-          log("Intercepting external openURI into Little Zen", { url });
-          LittleZen.openLittleWindow(win, {
+          openExternalInLittleZenOrNormal(
+            win,
             url,
-            source: "browserDOMWindow.openURI",
-            triggeringPrincipal: aTriggeringPrincipal,
-          });
+            () => {
+              log("Intercepting external openURI into Little Zen", { url });
+              LittleZen.openLittleWindow(win, {
+                url,
+                source: "browserDOMWindow.openURI",
+                triggeringPrincipal: aTriggeringPrincipal,
+              });
+            },
+            () => {
+              originalBrowserDOMWindow.openURI.call(
+                originalBrowserDOMWindow,
+                aURI,
+                aOpener,
+                aWhere,
+                aContext,
+                aTriggeringPrincipal,
+                aCsp
+              );
+            }
+          );
           return null;
         }
 
@@ -457,11 +765,27 @@
         });
 
         if (isExternal && url) {
-          log("Intercepting external openURIInFrame into Little Zen", { url });
-          LittleZen.openLittleWindow(win, {
+          openExternalInLittleZenOrNormal(
+            win,
             url,
-            source: "browserDOMWindow.openURIInFrame",
-          });
+            () => {
+              log("Intercepting external openURIInFrame into Little Zen", { url });
+              LittleZen.openLittleWindow(win, {
+                url,
+                source: "browserDOMWindow.openURIInFrame",
+              });
+            },
+            () => {
+              originalBrowserDOMWindow.openURIInFrame?.call(
+                originalBrowserDOMWindow,
+                aURI,
+                aParams,
+                aWhere,
+                aContext,
+                aName
+              );
+            }
+          );
           return null;
         }
 
@@ -1259,6 +1583,7 @@
     }
 
     positionLittleWindowButtons(win);
+    positionLittleWindowSpacePicker(win);
   }
 
   function attachWindowControlsPrefSync(win) {
@@ -2535,6 +2860,9 @@
     const picker = doc.createXULElement("toolbaritem");
     picker.id = PICKER_ID;
     picker.setAttribute("align", "center");
+    picker.setAttribute("skipintoolbarset", "true");
+    picker.setAttribute("removable", "false");
+    picker.setAttribute("overflows", "false");
     picker.classList.add("chromeclass-toolbar-additional");
 
     const openButton = doc.createXULElement("toolbarbutton");
@@ -2629,6 +2957,7 @@
 
       const searchIcon = doc.createXULElement("image");
       searchIcon.className = "zen-little-window-space-menu-search-icon";
+      searchIcon.setAttribute("src", "chrome://global/skin/icons/search-glass.svg");
       searchRow.appendChild(searchIcon);
 
       const searchInput = doc.createElementNS(
@@ -2643,11 +2972,16 @@
       searchRow.appendChild(searchInput);
       popup.appendChild(searchRow);
 
+      const list = doc.createXULElement("vbox");
+      list.id = PICKER_MENU_ID + "-list";
+      list.className = "zen-little-window-space-menu-list";
+      popup.appendChild(list);
+
       const noResults = doc.createXULElement("label");
       noResults.className = "zen-little-window-space-menu-no-results";
       noResults.setAttribute("value", "No spaces found");
       noResults.hidden = true;
-      popup.appendChild(noResults);
+      list.appendChild(noResults);
 
       const selectWorkspace = (ws) => {
         targetWorkspaceId = ws.uuid;
@@ -2659,28 +2993,45 @@
 
       const rows = [];
       workspaces.forEach(ws => {
-        const item = doc.createXULElement("menuitem");
-        item.className = "zen-workspace-context-menu-item zen-little-window-space-menu-item";
+        const item = doc.createXULElement("hbox");
+        item.className = "zen-little-window-space-menu-item";
+        item.setAttribute("align", "center");
         item.__littleZenWorkspace = ws;
         item.setAttribute("zen-workspace-id", ws.uuid);
         const icon = getWorkspaceDisplayIcon(ws);
         const iconIsSvg = !!icon && icon.endsWith(".svg");
         if (iconIsSvg) {
-          item.setAttribute("image", icon);
-          item.classList.add("menuitem-iconic", "zen-workspace-context-icon");
-          item.setAttribute("label", ws.name);
-        } else {
-          item.setAttribute("label", `${icon}  ${ws.name}`);
+          const iconEl = doc.createXULElement("image");
+          iconEl.className = "zen-little-window-space-menu-item-icon";
+          iconEl.setAttribute("src", icon);
+          item.appendChild(iconEl);
+        } else if (icon) {
+          const iconEl = doc.createXULElement("label");
+          iconEl.className =
+            "zen-little-window-space-menu-item-icon zen-little-window-space-menu-item-emoji";
+          iconEl.setAttribute("value", icon);
+          item.appendChild(iconEl);
         }
+        const name = doc.createXULElement("label");
+        name.className = "zen-little-window-space-menu-item-label";
+        name.setAttribute("value", ws.name ?? "Space");
+        name.setAttribute("crop", "end");
+        name.setAttribute("flex", "1");
+        item.appendChild(name);
         item.setAttribute("data-label", `${ws.name ?? ""} ${icon ?? ""}`.toLowerCase());
         if (ws.uuid === targetWorkspaceId) {
           item.setAttribute("selected", "true");
         }
-        item.addEventListener("command", () => {
+        item.addEventListener("click", event => {
+          event.preventDefault();
+          event.stopPropagation();
           selectWorkspace(ws);
         });
+        item.addEventListener("mouseenter", () => {
+          setSelectedRow(item);
+        });
         rows.push(item);
-        popup.appendChild(item);
+        list.appendChild(item);
       });
 
       const visibleRows = () => rows.filter(item => !item.hidden);
@@ -2833,21 +3184,46 @@
     win.setTimeout(refreshRouteTarget, 150);
     win.setTimeout(refreshRouteTarget, 750);
 
-    const spring2 = doc.querySelector(".customizableui-special-spring2");
-    if (spring2) {
-      spring2.appendChild(picker);
-      log("Injected space picker into right-side nav-bar spring");
-    } else {
-      const navBar =
-        doc.getElementById("nav-bar") ||
-        doc.getElementById("urlbar-container");
-      if (navBar) {
-        navBar.appendChild(picker);
-        log("Injected space picker into nav-bar fallback");
-      }
-    }
+    positionLittleWindowSpacePicker(win, picker);
 
     // Popup stays inside picker — moving it to popupSet breaks single-click command events
+  }
+
+  function positionLittleWindowSpacePicker(win, createdPicker = null) {
+    // The node is not in the document until this places it, so getElementById
+    // misses the picker that was just created.
+    const picker =
+      win.document.getElementById("zen-little-window-space-picker") || createdPicker;
+    if (!picker) {
+      return;
+    }
+
+    const leftControls = syncLittleWindowControlSide(win);
+    const navBar = win.document.getElementById("nav-bar");
+    const target = win.document.getElementById("nav-bar-customization-target");
+    const spring2 = win.document.querySelector(".customizableui-special-spring2");
+
+    // Sit beside the customization target, not inside it: overflowable
+    // toolbar hides unknown direct children of the target.
+    if (!leftControls && navBar && target?.parentElement === navBar) {
+      if (picker.nextElementSibling !== target) {
+        navBar.insertBefore(picker, target);
+        log("Moved Little Zen space picker to the left of the navbar");
+      }
+      return;
+    }
+
+    if (leftControls && spring2) {
+      if (picker.parentElement !== spring2) {
+        spring2.appendChild(picker);
+        log("Moved Little Zen space picker into the right-side navbar spring");
+      }
+      return;
+    }
+
+    if (navBar && picker.parentElement !== navBar) {
+      navBar.appendChild(picker);
+    }
   }
 
   function ensureSpacePicker(win) {
@@ -3367,16 +3743,9 @@
     if (redirectExternalStartup) {
       patchOpenBrowserWindow(win);
       const url = getExternalStartupUrl(win);
-      if (url) {
-        LittleZen.openLittleWindow(win, {
-          url,
-          source: "external-startup-window",
-          expanded: true,
-        });
-        win.close();
-        return;
+      if (!url) {
+        log("External startup URL not available yet; waiting for browser startup");
       }
-      log("External startup URL not available yet; waiting for browser startup");
     }
 
     win[PATCH_FLAGS.window] = true;
@@ -3460,12 +3829,32 @@
             return;
           }
 
-          LittleZen.openLittleWindow(win, {
-            url,
-            source: "external-startup-window",
-            expanded: true,
+          const keepNormalWindow = () => {
+            patchCompactModeManager(win);
+            patchVerticalTabsManager(win);
+            patchZenUIManager(win);
+            patchUrlbar(win);
+          };
+          if (!shouldOpenExternalLinkInLittleZen(url)) {
+            keepNormalWindow();
+            return;
+          }
+          probeDirectDownload(url).then(isDownload => {
+            if (win.closed) {
+              return;
+            }
+            if (isDownload) {
+              log("Skipping Little Zen after checking the response", { url });
+              keepNormalWindow();
+              return;
+            }
+            LittleZen.openLittleWindow(win, {
+              url,
+              source: "external-startup-window",
+              expanded: true,
+            });
+            win.close();
           });
-          win.close();
         };
         redirect();
         return;
@@ -3487,6 +3876,7 @@
     });
   }
 
+  attachDownloadBypass();
   bootstrapWindow(window);
   log("Little Zen runtime backport loaded.");
 })();

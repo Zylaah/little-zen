@@ -558,9 +558,16 @@
 
 /* ── Space Picker ─────────────────────────────────────────────────────────── */
 
+:root[zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) #nav-bar > #zen-little-window-space-picker {
+  order: -1;
+  flex-shrink: 0;
+}
+
 #zen-little-window-space-picker {
-  display: flex;
+  display: flex !important;
+  visibility: visible !important;
   align-items: center;
+  flex-shrink: 0 !important;
   gap: 0;
   padding: 0;
   border-radius: 16px;
@@ -572,6 +579,7 @@
   height: 32px !important;
   min-height: 32px;
   max-height: 32px;
+  min-width: 136px !important;
   max-width: 184px;
   margin-inline: 5px;
   transition: none !important;
@@ -663,11 +671,13 @@
   opacity: 1;
 }
 
+/* Scaled from #zen-folder-tabs-popup (250px wide, 40px rows) to this window. */
 #zen-little-window-space-menu {
-  --panel-padding: 0;
-  width: 176px;
-  min-width: 176px;
-  max-width: 176px;
+  --panel-padding: 0 !important;
+  padding: 0 !important;
+  width: 180px;
+  min-width: 180px;
+  max-width: 180px;
 }
 
 #zen-little-window-space-menu * {
@@ -676,18 +686,20 @@
 
 .zen-little-window-space-menu-search-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  justify-content: flex-start;
-  padding: 1px 5px;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  padding: 4px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor, transparent 90%);
 }
 
 .zen-little-window-space-menu-search-icon {
   width: 12px;
+  min-width: 12px;
   height: 12px;
-  margin-inline: 3px 5px;
-  list-style-image: url("chrome://browser/skin/search-glass.svg");
-  -moz-context-properties: fill;
+  min-height: 12px;
+  margin: 7px 1px 7px 7px;
+  flex-shrink: 0;
+  -moz-context-properties: fill, fill-opacity;
   fill: currentColor;
   opacity: 0.7;
 }
@@ -696,15 +708,17 @@
   appearance: none;
   flex: 1;
   min-width: 0;
-  height: 17px;
   margin: 0;
   padding: 0;
-  border: 0 !important;
-  outline: 0 !important;
+  border: none !important;
+  outline: none !important;
   background: transparent !important;
+  background-color: transparent;
   color: inherit;
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-align: start !important;
   direction: ltr;
 }
@@ -717,32 +731,68 @@
   display: none;
 }
 
+.zen-little-window-space-menu-list {
+  padding: 0 3px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
 .zen-little-window-space-menu-no-results {
-  padding: 8px;
+  display: block;
+  width: 100%;
+  max-width: calc(100% - 7px);
+  margin: 0 auto;
+  padding: 1.4em 0;
   text-align: center;
   opacity: 0.65;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .zen-little-window-space-menu-item {
-  min-height: 22px !important;
-  margin: 1px 3px !important;
-  border-radius: 5px !important;
-  font-size: 11px !important;
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 29px;
+  min-height: 29px !important;
+  margin: 3px 0 !important;
+  padding: 0 6px !important;
+  border-radius: 5px;
+  cursor: default;
+  font-size: 12px;
   transition: none !important;
 }
 
-.zen-little-window-space-menu-item > .menu-iconic-left {
-  margin-inline-end: 6px !important;
+.zen-little-window-space-menu-item-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  margin-inline: 3px 7px;
+  -moz-context-properties: fill;
+  fill: currentColor;
 }
 
-.zen-little-window-space-menu-item > .menu-iconic-text {
-  padding-inline-start: 0 !important;
+.zen-little-window-space-menu-item-emoji {
+  width: auto;
+  min-width: 12px;
+  height: auto;
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
 }
 
-.zen-little-window-space-menu-item[selected="true"],
-.zen-little-window-space-menu-item[_moz-menuactive="true"] {
-  background-color: color-mix(in srgb, currentColor 10%, transparent) !important;
+.zen-little-window-space-menu-item-label {
+  flex: 1;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: light-dark(black, white);
+}
+
+.zen-little-window-space-menu-item[selected="true"] {
+  background-color: color-mix(in srgb, currentColor, transparent 90%) !important;
 }
 
 /* ── Zia guards ───────────────────────────────────────────────────────────────
@@ -806,7 +856,6 @@
 }
 
 :root[zen-little-window="true"][zen-little-window="true"] #urlbar #page-action-buttons > .urlbar-page-action,
-:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button,
 :root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-copy-url-button {
   width: var(--urlbar-basic-component-size) !important;
   min-width: var(--urlbar-basic-component-size) !important;
@@ -818,18 +867,43 @@
   border-radius: var(--urlbar-icon-border-radius, var(--urlbar-inner-border-radius)) !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #urlbar :is(#page-action-buttons, .urlbar-page-action, #zen-site-data-icon-button, #zen-copy-url-button) image,
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar :is(#page-action-buttons, .urlbar-page-action, #zen-copy-url-button) image,
 :root[zen-little-window="true"][zen-little-window="true"] #urlbar .urlbar-icon {
   width: 16px !important;
   height: 16px !important;
 }
 
-:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button:not([starred], [boosting]) image {
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button {
+  display: flex !important;
+  width: unset !important;
+  min-width: unset !important;
+  max-width: unset !important;
+  height: unset !important;
+  min-height: unset !important;
+  max-height: unset !important;
+  margin: 0 !important;
+  padding: 0 4px !important;
+  box-sizing: content-box !important;
+  justify-content: unset !important;
+  align-items: center !important;
+  align-self: unset !important;
+  border-radius: var(--urlbar-icon-border-radius) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button image {
+  width: unset !important;
+  height: unset !important;
+  min-width: unset !important;
+  min-height: unset !important;
   list-style-image: url("chrome://browser/skin/zen-icons/permissions.svg") !important;
 }
 
 :root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button:is([starred], [boosting]) image {
   list-style-image: url("chrome://browser/skin/zen-icons/permissions-fill.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button:is(:hover, [open]) {
+  background-color: var(--urlbar-box-hover-bgcolor, var(--toolbarbutton-background-color-hover)) !important;
 }
 
 :root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button {
