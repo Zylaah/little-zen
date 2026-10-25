@@ -2950,10 +2950,19 @@
       if (canAdopt) {
         try {
           const knownTabs = new Set(mainWin.gBrowser.tabs);
-          mainWin.gBrowser.adoptTab(tab, mainWin.gBrowser.tabs.length, true);
-          let adopted = mainWin.gBrowser.selectedTab;
-          if (!adopted || adopted.ownerGlobal !== mainWin || knownTabs.has(adopted)) {
-            adopted = mainWin.gBrowser.tabs.find(t => !knownTabs.has(t)) || null;
+          // Zen and current Firefox take an options object here, not
+          // positional (index, select) args. Mirror Zen's own
+          // moveTabsToSyncedWorkspace: adopt at the end, select it, and
+          // attribute the target space up front.
+          let adopted =
+            mainWin.gBrowser.adoptTab(tab, {
+              tabIndex: Infinity,
+              selectTab: true,
+              spaceId: workspaceId,
+            }) || null;
+          if (!adopted || adopted.ownerGlobal !== mainWin) {
+            adopted =
+              mainWin.gBrowser.tabs.find(t => !knownTabs.has(t)) || null;
           }
           if (adopted) {
             log("transferTabToWorkspace: adopted tab landed, placing in workspace", {
