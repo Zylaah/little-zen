@@ -502,8 +502,8 @@
   padding-inline-end: 22px !important;
 }
 
-:root[zen-little-window="true"] #nav-bar > :not(.titlebar-buttonbox-container) :is(toolbarbutton, .toolbarbutton-1, .toolbarbutton-icon, .toolbarbutton-text, image),
-:root[zen-little-window="true"] #nav-bar > :not(.titlebar-buttonbox-container):is(toolbarbutton, .toolbarbutton-1, .toolbarbutton-icon, .toolbarbutton-text, image) {
+:root[zen-little-window="true"] #nav-bar > :not(.titlebar-buttonbox-container) :is(toolbarbutton, .toolbarbutton-1, .toolbarbutton-icon, .toolbarbutton-text, image):not(#zen-little-window-space-menu *),
+:root[zen-little-window="true"] #nav-bar > :not(.titlebar-buttonbox-container):is(toolbarbutton, .toolbarbutton-1, .toolbarbutton-icon, .toolbarbutton-text, image):not(#zen-little-window-space-menu *) {
   color: var(--zen-tab-header-foreground, inherit) !important;
   fill: currentColor !important;
   fill-opacity: 1 !important;
@@ -674,14 +674,28 @@
 /* Scaled from #zen-folder-tabs-popup (250px wide, 40px rows) to this window. */
 #zen-little-window-space-menu {
   --panel-padding: 0 !important;
+  --arrowpanel-padding: 0 !important;
   padding: 0 !important;
   width: 180px;
   min-width: 180px;
   max-width: 180px;
+  font: menu;
+  font-weight: 400;
+  color-scheme: light dark;
+  color: light-dark(black, white);
+  -moz-window-dragging: no-drag !important;
+}
+
+#zen-little-window-space-menu > .panel-arrowcontent,
+#zen-little-window-space-menu::part(content) {
+  padding: 0 !important;
+  -moz-window-dragging: no-drag !important;
 }
 
 #zen-little-window-space-menu * {
   max-width: -moz-available;
+  font-weight: 400;
+  -moz-window-dragging: no-drag !important;
 }
 
 .zen-little-window-space-menu-search-row {
@@ -692,6 +706,25 @@
   border-bottom: 1px solid color-mix(in srgb, currentColor, transparent 90%);
 }
 
+.zen-little-window-space-menu-search-icon,
+.zen-little-window-space-menu-item-icon {
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor !important;
+  color: light-dark(black, white) !important;
+  stroke: currentColor !important;
+}
+
+:root[zen-little-window="true"] #nav-bar > :not(.titlebar-buttonbox-container) #zen-little-window-space-menu :is(
+  image,
+  .zen-little-window-space-menu-search-icon,
+  .zen-little-window-space-menu-item-icon
+) {
+  color: light-dark(black, white) !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
+  --toolbarbutton-icon-fill: currentColor !important;
+}
+
 .zen-little-window-space-menu-search-icon {
   width: 12px;
   min-width: 12px;
@@ -699,13 +732,13 @@
   min-height: 12px;
   margin: 7px 1px 7px 7px;
   flex-shrink: 0;
-  -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
   opacity: 0.7;
 }
 
 .zen-little-window-space-menu-search {
   appearance: none;
+  -moz-user-focus: normal;
+  pointer-events: auto;
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -716,7 +749,7 @@
   background-color: transparent;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: start !important;
@@ -745,7 +778,6 @@
   padding: 1.4em 0;
   text-align: center;
   opacity: 0.65;
-  font-size: 11px;
 }
 
 .zen-little-window-space-menu-item {
@@ -758,7 +790,9 @@
   padding: 0 6px !important;
   border-radius: 5px;
   cursor: default;
-  font-size: 12px;
+  font-weight: 400;
+  pointer-events: auto;
+  -moz-user-focus: normal;
   transition: none !important;
 }
 
@@ -767,15 +801,12 @@
   height: 12px;
   flex-shrink: 0;
   margin-inline: 3px 7px;
-  -moz-context-properties: fill;
-  fill: currentColor;
 }
 
 .zen-little-window-space-menu-item-emoji {
   width: auto;
   min-width: 12px;
   height: auto;
-  font-size: 12px;
   line-height: 1;
   text-align: center;
 }
@@ -788,6 +819,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 400;
   color: light-dark(black, white);
 }
 

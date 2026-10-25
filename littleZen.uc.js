@@ -2896,7 +2896,6 @@
       "chromeclass-toolbar-additional",
       "zen-little-window-space-arrow"
     );
-    arrow.setAttribute("type", "menu");
     arrow.setAttribute("label", "▾");
     arrow.setAttribute("orient", "horizontal");
 
@@ -2906,8 +2905,11 @@
     arrow.appendChild(arrowLabel);
 
     // Popup menu
-    const popup = doc.createXULElement("menupopup");
+    const popup = doc.createXULElement("panel");
     popup.id = PICKER_MENU_ID;
+    popup.setAttribute("type", "arrow");
+    popup.setAttribute("orient", "vertical");
+    popup.setAttribute("consumeoutsideclicks", "true");
 
     picker.appendChild(openButton);
     picker.appendChild(arrow);
@@ -2966,7 +2968,7 @@
       );
       searchInput.id = PICKER_MENU_ID + "-search";
       searchInput.className = "zen-little-window-space-menu-search";
-      searchInput.setAttribute("type", "search");
+      searchInput.setAttribute("type", "text");
       searchInput.setAttribute("placeholder", "Search spaces");
       searchInput.setAttribute("autocomplete", "off");
       searchRow.appendChild(searchInput);
@@ -3022,16 +3024,32 @@
         if (ws.uuid === targetWorkspaceId) {
           item.setAttribute("selected", "true");
         }
-        item.addEventListener("click", event => {
-          event.preventDefault();
-          event.stopPropagation();
-          selectWorkspace(ws);
-        });
         item.addEventListener("mouseenter", () => {
           setSelectedRow(item);
         });
         rows.push(item);
         list.appendChild(item);
+      });
+
+      list.addEventListener("mousedown", event => {
+        if (event.button !== 0) {
+          return;
+        }
+        let node = event.target;
+        let item = null;
+        while (node && node !== list) {
+          if (node.classList?.contains("zen-little-window-space-menu-item")) {
+            item = node;
+            break;
+          }
+          node = node.parentNode;
+        }
+        if (!item?.__littleZenWorkspace) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        selectWorkspace(item.__littleZenWorkspace);
       });
 
       const visibleRows = () => rows.filter(item => !item.hidden);
@@ -3073,41 +3091,23 @@
         }
       };
       const stopSearchEvent = (event) => {
-        if (event.target === searchInput || searchRow.contains(event.target)) {
-          if (event.type === "keydown") {
-            if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
-              event.preventDefault();
-              event.stopPropagation();
-              moveSelection(1);
-              return;
-            }
-            if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
-              event.preventDefault();
-              event.stopPropagation();
-              moveSelection(-1);
-              return;
-            }
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.stopPropagation();
-              acceptSelection();
-              return;
-            }
-          }
-          event.stopPropagation();
+        if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey)) {
+          event.preventDefault();
+          moveSelection(1);
+          return;
+        }
+        if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
+          event.preventDefault();
+          moveSelection(-1);
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          acceptSelection();
         }
       };
 
-      for (const eventName of [
-        "keydown",
-        "keypress",
-        "keyup",
-        "mousedown",
-        "mouseup",
-        "click",
-      ]) {
-        popup.addEventListener(eventName, stopSearchEvent, true);
-      }
+      searchInput.addEventListener("keydown", stopSearchEvent);
       searchInput.addEventListener("input", filterRows);
       popup.addEventListener(
         "popupshown",
