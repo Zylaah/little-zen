@@ -497,15 +497,6 @@
   overflow: hidden !important;
 }
 
-:root[zen-little-window="true"][little-zen-bright-controls="true"] :is(
-  .titlebar-min,
-  .titlebar-max,
-  .titlebar-restore,
-  .titlebar-close
-):not(:hover):not(:-moz-window-inactive) {
-  background-color: rgb(0 0 0 / 36%) !important;
-}
-
 :root[zen-little-window="true"]:not([zen-window-buttons-reversed="true"]) .titlebar-button.titlebar-close {
   border-top-right-radius: var(--blended-addressbar-frame-radius);
   padding-inline-end: 22px !important;
@@ -752,4 +743,124 @@
 .zen-little-window-space-menu-item[selected="true"],
 .zen-little-window-space-menu-item[_moz-menuactive="true"] {
   background-color: color-mix(in srgb, currentColor 10%, transparent) !important;
+}
+
+/* ── Zia guards ───────────────────────────────────────────────────────────────
+   Zia's toolbar and address-bar rules match every browser window. The doubled
+   root attribute keeps each selector above the Zia rule it replaces. */
+
+:root[zen-little-window="true"][zen-little-window="true"] #zen-appcontent-navbar-wrapper {
+  color-scheme: inherit !important;
+  color: inherit !important;
+  --zen-toolbar-element-bg: inherit !important;
+  --zen-toolbar-element-bg-hover: inherit !important;
+  --zia-toolbar-ink: var(--zen-tab-header-foreground, currentColor) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar:not([breakout-extend]):not([zen-floating-urlbar="true"]) {
+  --urlbar-height: inherit !important;
+  height: var(--urlbar-height) !important;
+  min-height: var(--urlbar-height) !important;
+  max-height: var(--urlbar-height) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar:not([breakout-extend]) > .urlbar-background {
+  border-radius: calc(var(--border-radius-medium) * var(--zen-squircle-value)) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar[focused]:not([breakout-extend]) > .urlbar-background {
+  background: var(--zen-toolbar-element-bg) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar:not([breakout-extend]) :is(#identity-box, #page-action-buttons) {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #nav-bar :is(*, *::before, *::after):not(.titlebar-button, .titlebar-button *, .urlbarView-button, .urlbarView-favicon, .downloadButton, #downloads-indicator-progress-inner, #zen-loading-progress-bar) {
+  corner-shape: superellipse(var(--zen-squircle-value)) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #back-button {
+  list-style-image: url("chrome://browser/skin/zen-icons/back.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #forward-button {
+  list-style-image: url("chrome://browser/skin/zen-icons/forward.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #reload-button {
+  list-style-image: url("chrome://browser/skin/zen-icons/reload.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #stop-button {
+  list-style-image: url("chrome://browser/skin/zen-icons/close.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zia-copy-link-button {
+  display: none !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-copy-url-button {
+  display: flex !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #page-action-buttons > .urlbar-page-action,
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button,
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-copy-url-button {
+  width: var(--urlbar-basic-component-size) !important;
+  min-width: var(--urlbar-basic-component-size) !important;
+  height: var(--urlbar-basic-component-size) !important;
+  min-height: var(--urlbar-basic-component-size) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  border-radius: var(--urlbar-icon-border-radius, var(--urlbar-inner-border-radius)) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar :is(#page-action-buttons, .urlbar-page-action, #zen-site-data-icon-button, #zen-copy-url-button) image,
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar .urlbar-icon {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button:not([starred], [boosting]) image {
+  list-style-image: url("chrome://browser/skin/zen-icons/permissions.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #urlbar #zen-site-data-icon-button:is([starred], [boosting]) image {
+  list-style-image: url("chrome://browser/skin/zen-icons/permissions-fill.svg") !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button {
+  color: var(--little-zen-page-header-foreground, var(--zen-tab-header-foreground, currentColor)) !important;
+  --toolbarbutton-background-color-hover: color-mix(
+    in srgb,
+    var(--little-zen-page-header-foreground, var(--zen-branding-bg-reverse, currentColor)) 7%,
+    transparent
+  ) !important;
+  --toolbarbutton-background-color-active: color-mix(
+    in srgb,
+    var(--little-zen-page-header-foreground, var(--zen-branding-bg-reverse, currentColor)) 10%,
+    transparent
+  ) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover {
+  background-color: var(--toolbarbutton-background-color-hover) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button:is(.titlebar-min, .titlebar-max, .titlebar-restore):hover:active {
+  background-color: var(--toolbarbutton-background-color-active) !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] #nav-bar .titlebar-button > .toolbarbutton-icon {
+  stroke: currentColor !important;
+  fill: currentColor !important;
+}
+
+:root[zen-little-window="true"][zen-little-window="true"] :is(#back-button, #forward-button, #reload-button, #stop-button)::before,
+:root[zen-little-window="true"][zen-little-window="true"] :is(#back-button, #forward-button, #reload-button)::after,
+:root[zen-little-window="true"][zen-little-window="true"] #stop-reload-button::after {
+  content: none !important;
 }
