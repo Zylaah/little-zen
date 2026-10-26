@@ -632,6 +632,258 @@
     }
   }
 
+  // Sine injects this script on the window load event, after the new browser
+  // window has already painted. The opener arms a pending mark, and this
+  // observer stamps the attribute when the root element is created.
+  const DOCUMENT_MARK_KEY = "__littleZenDocumentMark";
+
+  function littleWindowDocumentMarkState() {
+    if (!Services[DOCUMENT_MARK_KEY]) {
+      Services[DOCUMENT_MARK_KEY] = {
+        pending: null,
+        observer: null,
+        owner: null,
+      };
+    }
+    return Services[DOCUMENT_MARK_KEY];
+  }
+
+  function browserDocumentURI(doc) {
+    try {
+      return String(doc?.documentURI || doc?.URL || "");
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function documentForInsertedSubject(subject) {
+    try {
+      return subject?.QueryInterface?.(Ci.nsIDocument) || subject;
+    } catch (error) {
+      return subject;
+    }
+  }
+
+  const LITTLE_WINDOW_CHROME_SHEET = "chrome://sine/content/chrome.css";
+
+  function ensureLittleWindowChromeSheet(win) {
+    if (!win?.windowUtils || win.__littleZenChromeSheetReady) {
+      return;
+    }
+
+    try {
+      win.windowUtils.loadSheet(
+        Services.io.newURI(LITTLE_WINDOW_CHROME_SHEET),
+        win.windowUtils.USER_SHEET
+      );
+      win.__littleZenChromeSheetReady = true;
+    } catch (error) {
+      win.__littleZenChromeSheetReady = true;
+    }
+  }
+
+  function setLittleWindowVisible(win, visible) {
+    try {
+      win.docShell.treeOwner.QueryInterface(Ci.nsIBaseWindow).visibility = visible;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function revealLittleWindow(win) {
+    if (!win || win.closed || !win.__littleZenHeldHidden) {
+      return;
+    }
+
+    win.__littleZenHeldHidden = false;
+    setLittleWindowVisible(win, true);
+    try {
+      win.focus();
+    } catch (error) {}
+  }
+
+  function finishPendingLittleWindow(win, options, reason) {
+    if (!win || win.closed) {
+      return false;
+    }
+
+    let href = "";
+    try {
+      href = String(win.location?.href || "");
+    } catch (error) {
+      return false;
+    }
+    if (!href.startsWith("chrome://browser/content/browser.xhtml")) {
+      return false;
+    }
+
+    const state = littleWindowDocumentMarkState();
+    markLittleWindowEarly(win, options);
+    ensureLittleWindowChromeSheet(win);
+    const marked = !!win.document?.documentElement?.hasAttribute(LITTLE_WINDOW_ATTR);
+    if (!marked) {
+      return false;
+    }
+
+    if (state.pending?.window === win || state.pending?.options === options) {
+      state.pending = null;
+    }
+    revealLittleWindow(win);
+    if (!win.__littleZenEarlyMarkLogged) {
+      win.__littleZenEarlyMarkLogged = true;
+      log("Marked Little Zen window before showing it", { reason });
+    }
+    return true;
+  }
+
+  function holdOpeningLittleWindow(win, options) {
+    if (!win?.isChromeWindow || win.__littleZenHeldHidden) {
+      return false;
+    }
+
+    let href = "";
+    try {
+      href = String(win.location?.href || "");
+    } catch (error) {}
+    if (
+      href &&
+      href !== "about:blank" &&
+      !href.startsWith("chrome://browser/content/browser.xhtml")
+    ) {
+      return false;
+    }
+
+    if (!setLittleWindowVisible(win, false)) {
+      return false;
+    }
+
+    win.__littleZenHeldHidden = true;
+    const revealIfMarked = () => finishPendingLittleWindow(win, options, "before-first-layout");
+    win.addEventListener("MozBeforeInitialXULLayout", revealIfMarked, { once: true });
+    win.addEventListener("DOMContentLoaded", revealIfMarked, { once: true });
+    return true;
+  }
+
+  function stampLittleWindowDocument(doc, options) {
+    const root = doc?.documentElement;
+    if (!root) {
+      return false;
+    }
+
+    root.setAttribute(LITTLE_WINDOW_ATTR, "true");
+    root.toggleAttribute("zen-little-window-loading", !!options?.url);
+    const win = doc.defaultView;
+    if (!win) {
+      return true;
+    }
+
+    return finishPendingLittleWindow(win, options, "document-created");
+  }
+
+  function installLittleWindowDocumentMark(win) {
+    const state = littleWindowDocumentMarkState();
+    if (state.observers) {
+      for (const entry of state.observers) {
+        try {
+          Services.obs.removeObserver(entry.observer, entry.topic);
+        } catch (error) {}
+      }
+    }
+
+    const documentObserver = {
+      observe(subject) {
+        const pending = state.pending;
+        if (!pending) {
+          return;
+        }
+
+        const doc = documentForInsertedSubject(subject);
+        const href = browserDocumentURI(doc);
+        if (!href.startsWith("chrome://browser/content/browser.xhtml")) {
+          return;
+        }
+
+        const markedWindow = doc?.defaultView;
+        if (pending.window && markedWindow && markedWindow !== pending.window) {
+          return;
+        }
+        if (!pending.window && !pending.open) {
+          return;
+        }
+
+        stampLittleWindowDocument(doc, pending.options);
+      },
+    };
+
+    const windowObserver = {
+      observe(subject) {
+        const pending = state.pending;
+        if (!pending?.open || pending.window) {
+          return;
+        }
+
+        let opened = subject;
+        try {
+          opened = subject.QueryInterface(Ci.nsIDOMWindow);
+        } catch (error) {}
+        if (!opened?.isChromeWindow) {
+          return;
+        }
+
+        if (!holdOpeningLittleWindow(opened, pending.options)) {
+          return;
+        }
+
+        pending.window = opened;
+      },
+    };
+
+    state.observers = [
+      { observer: documentObserver, topic: "document-element-inserted" },
+      { observer: windowObserver, topic: "domwindowopened" },
+    ];
+    for (const entry of state.observers) {
+      Services.obs.addObserver(entry.observer, entry.topic);
+    }
+    state.observer = documentObserver;
+    state.owner = win;
+    win.__littleZenReinstallDocumentMark = () => installLittleWindowDocumentMark(win);
+
+    if (win.__littleZenDocumentMarkUnload) {
+      return;
+    }
+
+    win.__littleZenDocumentMarkUnload = true;
+    win.addEventListener(
+      "unload",
+      () => {
+        if (state.owner !== win) {
+          return;
+        }
+
+        if (state.observers) {
+          for (const entry of state.observers) {
+            try {
+              Services.obs.removeObserver(entry.observer, entry.topic);
+            } catch (error) {}
+          }
+        }
+        state.observers = null;
+        state.observer = null;
+        state.owner = null;
+
+        for (const other of Services.wm.getEnumerator("navigator:browser")) {
+          if (other !== win && !other.closed && other.__littleZenReinstallDocumentMark) {
+            other.__littleZenReinstallDocumentMark();
+            break;
+          }
+        }
+      },
+      { once: true }
+    );
+  }
+
   function releaseLittleWindowPresentation(win, reason = "unknown") {
     if (!isBrowserWindow(win) || win.__littleZenPresentationReleased) {
       return;
@@ -840,19 +1092,53 @@
         features: options.features ?? OPEN_FEATURES,
         zenSyncedWindow: false,
       };
+      const markOptions = {
+        url: options.url,
+        expanded: options.expanded,
+      };
 
-      const littleWindow = originalOpenBrowserWindow.call(this, nextOptions);
-      if (littleWindow) {
-        markLittleWindowEarly(littleWindow, {
-          url: options.url,
-          expanded: options.expanded,
-        });
-        littleWindow._zenStartupSyncFlag = "unsynced";
-        log("Opened Little Zen browser window", {
-          startupSyncFlag: littleWindow._zenStartupSyncFlag,
-          hasPendingUrl: !!littleWindow.__littleZenPendingURL,
-        });
+      installLittleWindowDocumentMark(win);
+      const state = littleWindowDocumentMarkState();
+      state.pending = {
+        open: true,
+        window: null,
+        options: markOptions,
+      };
+
+      let littleWindow = null;
+      try {
+        littleWindow = originalOpenBrowserWindow.call(this, nextOptions);
+      } catch (error) {
+        if (state.pending?.options === markOptions) {
+          state.pending = null;
+        }
+        throw error;
       }
+
+      if (!littleWindow) {
+        if (state.pending?.options === markOptions) {
+          state.pending = null;
+        }
+        return littleWindow;
+      }
+
+      if (state.pending?.options === markOptions && !state.pending.window) {
+        state.pending.window = littleWindow;
+      }
+      if (state.pending?.options === markOptions) {
+        state.pending.open = false;
+      }
+
+      finishPendingLittleWindow(littleWindow, markOptions, "open-returned");
+
+      littleWindow._zenStartupSyncFlag = "unsynced";
+      log("Opened Little Zen browser window", {
+        startupSyncFlag: littleWindow._zenStartupSyncFlag,
+        hasPendingUrl: !!littleWindow.__littleZenPendingURL,
+        markedBeforeReturn: littleWindow.document?.documentElement?.hasAttribute(
+          LITTLE_WINDOW_ATTR
+        ),
+      });
       return littleWindow;
     };
 
@@ -3984,7 +4270,9 @@
             applyExpandedLittleWindow(littleWindow, "expanded-request");
           });
         }
-        littleWindow.focus();
+        if (!littleWindow.__littleZenHeldHidden) {
+          littleWindow.focus();
+        }
       }
 
       return littleWindow;
@@ -3995,6 +4283,8 @@
     if (!isBrowserWindow(win) || win[PATCH_FLAGS.window]) {
       return;
     }
+
+    installLittleWindowDocumentMark(win);
 
     const redirectExternalStartup =
       !isLittleWindow(win) &&
