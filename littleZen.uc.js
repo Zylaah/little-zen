@@ -1212,6 +1212,12 @@
       const originalUpdateEvent = manager._updateEvent;
       manager._updateEvent = function (...args) {
         const root = win.document.documentElement;
+        if (
+          !root.hasAttribute(LITTLE_WINDOW_ATTR) &&
+          !win._zenStartupLittleWindow
+        ) {
+          return originalUpdateEvent.apply(this, args);
+        }
         if (root.hasAttribute("zen-single-toolbar")) {
           this._hasSetSingleToolbar = true;
           this._navbarParent ||= this._toolbarOriginalParent;
@@ -3680,7 +3686,7 @@
         !e.defaultPrevented &&
         !e.repeat &&
         (AppConstants.platform === "macosx" ? e.metaKey : e.ctrlKey) &&
-        e.key?.toLowerCase() === "o"
+        isLittleZenShortcutKey(e, "KeyO", "o")
       ) {
         e.preventDefault();
         e.stopPropagation();
@@ -4053,6 +4059,14 @@
     log("Injected cmd_zenNewLittleWindow command");
   }
 
+  function isLittleZenShortcutKey(event, code, key) {
+    // Option remaps event.key on macOS (Option+N is "~"), but event.code stays KeyN.
+    if (AppConstants.platform === "macosx" && event.code === code) {
+      return true;
+    }
+    return event.key?.toLowerCase() === key;
+  }
+
   function ensureFallbackShortcut(win) {
     if (win[PATCH_FLAGS.keyListener]) {
       return;
@@ -4066,10 +4080,10 @@
         event.defaultPrevented ||
         event.repeat ||
         event.shiftKey ||
-        event.getModifierState("AltGraph") ||
+        (AppConstants.platform !== "macosx" && event.getModifierState("AltGraph")) ||
         !event.altKey ||
         !isAccelPressed(event) ||
-        event.key?.toLowerCase() !== "n"
+        !isLittleZenShortcutKey(event, "KeyN", "n")
       ) {
         return;
       }

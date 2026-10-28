@@ -7,7 +7,7 @@ A Zen Browser chrome mod that backports and experiments with Little Zen windows:
 ## Features
 
 - Opens compact Little Zen windows from normal Zen browsing flows.
-- Opens a blank Little Zen window with `Ctrl+Alt+N`.
+- Opens a blank Little Zen window with `Ctrl+Alt+N` (`Cmd+Opt+N` on macOS).
 - Uses an editable address and search bar inside Little Zen.
 - Keeps searches and typed addresses in the Little Zen window.
 - Adds Back, Forward, and Reload navigation controls.
@@ -15,8 +15,8 @@ A Zen Browser chrome mod that backports and experiments with Little Zen windows:
 - Opens an existing Zen tab in Little Zen with `Ctrl+Alt+Click` on the tab.
 - Keeps Little Zen navigation in its window and uses the default container instead of Zen Space routing.
 - Keeps container-extension redirects in Little Zen instead of moving them to the main window.
-- Press `Ctrl+O` in Little Zen to move the page to the most recent Space.
-- Press `Ctrl+Alt+O` to select a different Space.
+- Press `Ctrl+O` (`Cmd+O` on macOS) in Little Zen to move the page to the most recent Space.
+- Press `Ctrl+Alt+O` (`Cmd+Opt+O` on macOS) to select a different Space.
 - Preserves live tabs when moving them back into the main Zen window.
 - Adds a native-feeling `Open in Space` control with searchable space selection.
 - Adapts the Little Zen frame, URL bar, page shadow, and transparent browser styling to the active page/theme.
@@ -32,6 +32,8 @@ Set `extensions.littleZen.debugRouting` to `true` in `about:config` to enable ve
 ## Install
 
 Copy this folder into your Zen profile's `chrome/sine-mods` directory, then enable or reference the mod from your local `mods.json` setup. Restart Zen after changing chrome scripts or styles.
+
+Sine loads the stylesheet from a hand-installed copy. It loads `littleZen.uc.js` only when `sine.allow-unsafe-js` is `true` in `about:config`, unless the mod's `origin` is `"store"`.
 
 This mod targets Twilight-style Zen profile chrome loading and may need adjustment as upstream Little Zen support changes.
 
